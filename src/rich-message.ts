@@ -10,7 +10,6 @@ export type InputRichBlock =
   | { type: 'paragraph'; text: RichText }
   | { type: 'heading'; size: number; text: RichText }
   | { type: 'photo'; photo: { type: 'photo'; media: string } }
-  | { type: 'pre'; text: string }
   | { type: 'buttons'; buttons: RichMessageButton[]; align: 'right' };
 
 export interface InputRichMessage {
@@ -20,11 +19,11 @@ export interface InputRichMessage {
 }
 
 const LEVELS = {
-  info: {icon: 'ℹ️', label: 'اطلاع‌رسانی'},
-  success: {icon: '✅', label: 'موفق'},
-  warning: {icon: '⚠️', label: 'هشدار'},
-  error: {icon: '🔴', label: 'خطا'},
-  critical: {icon: '🚨', label: 'بحرانی'},
+  info: {icon: 'ℹ️', label: 'Info'},
+  success: {icon: '✅', label: 'Success'},
+  warning: {icon: '⚠️', label: 'Warning'},
+  error: {icon: '🔴', label: 'Error'},
+  critical: {icon: '🚨', label: 'Critical'},
 } as const;
 
 export const NOTIFICATION_TIME_ZONE = 'Asia/Tehran';
@@ -70,6 +69,11 @@ export function formatNotification(input: NotificationInput, source?: SourceCont
   return lines.join('\n');
 }
 
+/** Use monowidth text without the client's themed preformatted block background. */
+function monospaceSection(title: string, text: string): InputRichBlock {
+  return {type: 'paragraph', text: ['\n', {type: 'bold', text: title}, '\n\n', {type: 'code', text}]};
+}
+
 /** Align short technical fields; keep long or RTL values on their own line without changing their contents. */
 function technicalSection(title: string, entries: [string, string][]): InputRichBlock {
   const width = Math.min(12, Math.max(...entries.map(([key]) => key.length)));
@@ -79,7 +83,7 @@ function technicalSection(title: string, entries: [string, string][]): InputRich
       && width + 3 + [...value].length <= 36;
     return compact ? `${key.padEnd(width)} : ${value}` : `${key}:\n${value}`;
   });
-  return {type: 'pre', text: `${title}\n\n${rows.join('\n')}`};
+  return monospaceSection(title, rows.join('\n'));
 }
 
 /** Explicit blocks keep application-controlled strings literal, including HTML, Markdown and mentions. */
@@ -109,7 +113,7 @@ export function formatRichNotification(
   if (input.metadata && Object.keys(input.metadata).length) {
     blocks.push(technicalSection('METADATA', Object.entries(input.metadata).map(([key, value]) => [key, String(value)])));
   }
-  if (input.tags?.length) blocks.push({type: 'pre', text: `TAGS\n\n${input.tags.join('\n')}`});
+  if (input.tags?.length) blocks.push(monospaceSection('TAGS', input.tags.join('\n')));
   if (input.url) {
     blocks.push({
       type: 'buttons',

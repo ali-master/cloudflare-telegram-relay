@@ -99,7 +99,9 @@ See [integration recipes](docs/integrations.md) for **GitHub Actions, GitLab CI,
 
 ### Telegram message layout
 
-Notifications use Telegram's structured Rich Messages as a technical report, with a Persian heading, the literal body, and an optional photo inside the same message. Details stay visible in native monospace blocks: **CONTEXT** contains the application, event, environment, severity, and optional country flag; **TIME** shows numeric Jalali and Gregorian dates with a shared time in **Asia/Tehran**, using ASCII digits for both calendars. Optional **METADATA** and **TAGS** blocks follow.
+Notifications use Telegram's structured Rich Messages as a technical report, with an English severity heading (Info, Success, Warning, Error, or Critical), the literal body, and an optional photo inside the same message. A supplied `title` replaces the default heading. Details stay visible in paragraphs with bold section labels and monospace text: **CONTEXT** contains the application, event, environment, severity, and optional country flag; **TIME** shows numeric Jalali and Gregorian dates with a shared time in **Asia/Tehran**, using ASCII digits for both calendars. Optional **METADATA** and **TAGS** sections follow.
+
+Technical sections use `RichTextCode` inside paragraphs instead of `pre` blocks, avoiding the preformatted block's accent background. Telegram controls client/theme colors; the API does not expose a per-level background color for these sections.
 
 Metadata keeps scalar key/value pairs intact. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters. The report uses neither tables nor collapsed sections. Actions include an optional primary incident-link button and separate event/notification-ID copy buttons; the UUID appears only through its copy button.
 

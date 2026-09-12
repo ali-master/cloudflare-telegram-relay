@@ -5,21 +5,16 @@ info:
   version: "1.0.0"
   description: "Multi-tenant Telegram notification gateway. Each tenant has an isolated bot, audience, queue, access policy, quotas, and applications. Producers use an APPLICATION API key in Authorization: Bearer or X-API-Key. The master API_KEY is for admin login only. The header key binds application identity and display name. Explicit routes use /api/v1/tenants/{tenantId}; /api/v1 is the default-tenant alias. Producers share the tenant minute quota across applications/IPs. Admin login creates an 8-hour HttpOnly session; admin mutations require an exact Origin header. All JSON bodies are capped at 64 KiB. Acceptance is not proof of Telegram delivery."
 servers:
-  -
-    url: "/"
+  - url: "/"
     description: "The current deployed relay origin."
 tags:
-  -
-    name: "Producer API"
+  - name: "Producer API"
     description: "Application-authenticated tenant ingestion and own-application status."
-  -
-    name: "Administration"
+  - name: "Administration"
     description: "Master-key session, tenants, bots, applications, policies, bans, quotas, and reports."
-  -
-    name: "Telegram"
+  - name: "Telegram"
     description: "Telegram-owned subscription callback."
-  -
-    name: "Health"
+  - name: "Health"
     description: "Basic runtime routing health."
 paths:
   "/health":
@@ -27,9 +22,9 @@ paths:
       operationId: "health"
       summary: "Worker routing health (does not contact Telegram)"
       tags:
-        ["Health"]
+        [ "Health" ]
       security:
-        []
+        [ ]
       responses:
         "200":
           description: "Worker handler is responding."
@@ -43,7 +38,7 @@ paths:
                   service:
                     const: "telegram-relay"
                 required:
-                  ["status","service"]
+                  [ "status","service" ]
                 additionalProperties: false
         "413":
           "$ref": "#/components/responses/BodyTooLarge"
@@ -52,14 +47,12 @@ paths:
       operationId: "createNotification"
       summary: "Broadcast to the current active subscriber snapshot"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "200":
           description: "Existing idempotent request; no new broadcast was created."
@@ -96,8 +89,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -117,14 +109,12 @@ paths:
       operationId: "getNotification"
       summary: "Read a retained notification and aggregate delivery counts"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "200":
           description: "Notification with current aggregate status; recipient identities are not included."
@@ -155,8 +145,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -168,14 +157,12 @@ paths:
       operationId: "ingestAlertmanager"
       summary: "Expand a native Alertmanager webhook into 1–20 notifications"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "202":
           description: "Accepted records; duplicates are indicated per record."
@@ -207,8 +194,7 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Maps each alert separately and truncates selected text fields. Resolved alerts use success severity. Batch enqueue is sequential, not atomic: a later error can occur after earlier records were accepted. A retry without Idempotency-Key can create duplicates. When using a key, preserve the alerts array order and payload. Alertmanager's native receiver does not supply a unique event key by default. This is the default-tenant compatibility route. Authentication requires a default-tenant application key; master admin keys are rejected."
       parameters:
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -227,14 +213,12 @@ paths:
       operationId: "ingestGrafana"
       summary: "Normalize one native Grafana alert-group notification"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "202":
           description: "Group notification accepted or found by idempotency key."
@@ -266,8 +250,7 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Uses title, message, status, commonLabels, and externalURL; individual alert details are not expanded. Selected strings are truncated to normalized limits. API-key authentication is required; Grafana HMAC signatures are not verified. This is the default-tenant compatibility route. Authentication requires a default-tenant application key; master admin keys are rejected."
       parameters:
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -286,12 +269,11 @@ paths:
       operationId: "adminLogin"
       summary: "Exchange the environment API_KEY for an 8-hour admin session"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        []
+        [ ]
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -311,7 +293,7 @@ paths:
                   maxLength: 1024
                   minLength: 1
               required:
-                ["apiKey"]
+                [ "apiKey" ]
               additionalProperties: false
       responses:
         "200":
@@ -324,7 +306,7 @@ paths:
                   authenticated:
                     const: true
                 required:
-                  ["authenticated"]
+                  [ "authenticated" ]
                 additionalProperties: false
           headers:
             Set-Cookie:
@@ -352,10 +334,10 @@ paths:
       operationId: "listLoginAudit"
       summary: "Read failed dashboard login attempts across the deployment"
       description: "Retains at most the latest 5000 attempts for 30 days. invalid_key means an incorrect or missing submitted key; rate_limited means the request was rejected before checking its key. Successful logins, malformed JSON, rejected origins, and unavailable authentication are not recorded. IP and country use trusted Cloudflare metadata; userAgent is bounded, self-reported text. Credentials, bodies, and cookies are excluded. Results are ordered newest first and offset pages can shift as new attempts arrive."
-      tags: ["Administration"]
+      tags: [ "Administration" ]
       security:
-        - adminSession: []
-        - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       parameters:
         - name: "limit"
           in: "query"
@@ -373,7 +355,7 @@ paths:
           schema: { type: "string", pattern: "^[A-Za-z]{2}$" }
         - name: "outcome"
           in: "query"
-          schema: { type: "string", enum: ["invalid_key", "rate_limited"] }
+          schema: { type: "string", enum: [ "invalid_key", "rate_limited" ] }
       responses:
         "200":
           description: "Retained matching entries and pagination metadata."
@@ -381,7 +363,7 @@ paths:
             "application/json":
               schema:
                 type: "object"
-                required: ["entries", "total", "limit", "offset"]
+                required: [ "entries", "total", "limit", "offset" ]
                 additionalProperties: false
                 properties:
                   total: { type: "integer", minimum: 0, maximum: 5000 }
@@ -392,7 +374,7 @@ paths:
                     maxItems: 100
                     items:
                       type: "object"
-                      required: ["id", "createdAt", "ip", "country", "userAgent", "requestId", "outcome"]
+                      required: [ "id", "createdAt", "ip", "country", "userAgent", "requestId", "outcome" ]
                       additionalProperties: false
                       properties:
                         id: { type: "string", pattern: "^[0-9]+$" }
@@ -400,8 +382,8 @@ paths:
                         ip: { type: "string", maxLength: 64 }
                         country: { type: "string", pattern: "^[A-Z]{2}$" }
                         userAgent: { type: "string", maxLength: 512 }
-                        requestId: { type: ["string", "null"], maxLength: 36 }
-                        outcome: { type: "string", enum: ["invalid_key", "rate_limited"] }
+                        requestId: { type: [ "string", "null" ], maxLength: 36 }
+                        outcome: { type: "string", enum: [ "invalid_key", "rate_limited" ] }
         "400":
           "$ref": "#/components/responses/BadRequest"
         "401":
@@ -419,8 +401,8 @@ paths:
       operationId: "adminSession"
       summary: "Check whether the admin session remains valid"
       tags:
-        ["Administration"]
-      security: []
+        [ "Administration" ]
+      security: [ ]
       responses:
         "200":
           description: "Session status. Missing, invalid, or expired cookies return authenticated=false without an HTTP authentication error."
@@ -432,7 +414,7 @@ paths:
                   authenticated:
                     type: boolean
                 required:
-                  ["authenticated"]
+                  [ "authenticated" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -453,14 +435,12 @@ paths:
       operationId: "adminLogout"
       summary: "Clear the browser's session cookie"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -472,7 +452,7 @@ paths:
                   authenticated:
                     const: false
                 required:
-                  ["authenticated"]
+                  [ "authenticated" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -491,8 +471,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -505,14 +484,12 @@ paths:
       operationId: "adminContext"
       summary: "Read the current request's source IP and country"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -541,14 +518,12 @@ paths:
       operationId: "adminOverview"
       summary: "Read retained totals, seven daily UTC buckets, and recent notifications"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -578,14 +553,12 @@ paths:
       operationId: "getSettings"
       summary: "Read current settings"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -613,14 +586,12 @@ paths:
       operationId: "updateSettings"
       summary: "Merge and validate settings"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -645,8 +616,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -665,14 +635,12 @@ paths:
       operationId: "listSubscribers"
       summary: "List private-chat subscribers"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -697,8 +665,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "page"
+        - name: "page"
           in: "query"
           schema:
             type: "integer"
@@ -706,8 +673,7 @@ paths:
             maximum: 999999
             default: 1
           description: "One-based page; page size is fixed at 20."
-        -
-          name: "search"
+        - name: "search"
           in: "query"
           description: "Trimmed subscriber search across Telegram first name, display-name override, username, and chat ID; at most 100 characters after trimming."
           schema:
@@ -726,10 +692,10 @@ paths:
       operationId: "getSubscriber"
       summary: "Read a subscriber profile and access policy"
       description: "Returns private admin profile details for the default tenant, including notes, Telegram preferences, and the independent admin application-access policy."
-      tags: ["Administration"]
+      tags: [ "Administration" ]
       security:
-        - adminSession: []
-        - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         "200":
           description: "Subscriber profile."
@@ -759,10 +725,10 @@ paths:
       operationId: "updateSubscriber"
       summary: "Update a subscriber profile and allowed applications"
       description: "Updates the default tenant subscriber using optimistic concurrency. Admin permissions intersect Telegram preferences; /all cannot bypass restrictions. An empty selected allowlist permits none. Profile/access changes do not reactivate, ban, unban, or rename a Telegram account. Omitted profile fields are preserved."
-      tags: ["Administration"]
+      tags: [ "Administration" ]
       security:
-        - adminSession: []
-        - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       parameters:
         - name: "Origin"
           in: "header"
@@ -819,14 +785,12 @@ paths:
       operationId: "listNotifications"
       summary: "List retained notifications"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -851,8 +815,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "page"
+        - name: "page"
           in: "query"
           schema:
             type: "integer"
@@ -860,22 +823,19 @@ paths:
             maximum: 999999
             default: 1
           description: "One-based page; page size is fixed at 20."
-        -
-          name: "level"
+        - name: "level"
           in: "query"
           schema:
             type: "string"
             enum:
-              ["info","success","warning","error","critical"]
-        -
-          name: "search"
+              [ "info","success","warning","error","critical" ]
+        - name: "search"
           in: "query"
           schema:
             type: "string"
             maxLength: 100
           description: "Search application, event, or message text."
-        -
-          name: "applicationId"
+        - name: "applicationId"
           in: "query"
           schema:
             type: "string"
@@ -885,14 +845,12 @@ paths:
       operationId: "adminCreateNotification"
       summary: "Broadcast from the authenticated dashboard"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "202":
           description: "Accepted record or idempotent duplicate."
@@ -923,8 +881,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -932,8 +889,7 @@ paths:
             type: "string"
             format: "uri"
             example: "https://relay.example.com"
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -952,14 +908,12 @@ paths:
       operationId: "adminGetNotification"
       summary: "Read notification and up to 100 recipient delivery details"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Notification and delivery records."
@@ -990,8 +944,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -1002,14 +955,12 @@ paths:
       operationId: "adminStatus"
       summary: "Read cached bot/webhook status for the default tenant"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1038,14 +989,12 @@ paths:
       operationId: "registerTelegramWebhook"
       summary: "Register this HTTPS deployment as the bot's webhook"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1060,7 +1009,7 @@ paths:
                     type: "string"
                     format: "uri"
                 required:
-                  ["ok","url"]
+                  [ "ok","url" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1086,8 +1035,7 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Registers /telegram/webhook for the enabled default tenant, preserving pending updates. Uses message, my_chat_member, and callback_query. No body required."
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -1100,11 +1048,10 @@ paths:
       operationId: "telegramWebhook"
       summary: "Receive Telegram subscription updates"
       tags:
-        ["Telegram"]
+        [ "Telegram" ]
       security:
-        -
-          telegramWebhookSecret:
-            []
+        - telegramWebhookSecret:
+            [ ]
       requestBody:
         required: true
         content:
@@ -1122,7 +1069,7 @@ paths:
                   ok:
                     const: true
                 required:
-                  ["ok"]
+                  [ "ok" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1145,14 +1092,12 @@ paths:
       operationId: "listApplications"
       summary: "List default tenant applications"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1166,7 +1111,7 @@ paths:
                     items:
                       "$ref": "#/components/schemas/Application"
                 required:
-                  ["applications"]
+                  [ "applications" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1200,14 +1145,12 @@ paths:
       operationId: "createApplication"
       summary: "Create application and reveal its generated key once"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "201":
           description: "Success."
@@ -1244,8 +1187,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1263,14 +1205,12 @@ paths:
       operationId: "updateApplication"
       summary: "Rename, enable, or disable application"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1282,7 +1222,7 @@ paths:
                   application:
                     "$ref": "#/components/schemas/Application"
                 required:
-                  ["application"]
+                  [ "application" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1313,15 +1253,13 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "applicationId"
+        - name: "applicationId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1339,14 +1277,12 @@ paths:
       operationId: "rotateApplicationKey"
       summary: "Replace application key and reveal it once"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1383,15 +1319,13 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "applicationId"
+        - name: "applicationId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1410,21 +1344,19 @@ paths:
                   minimum: 1
                   description: "Version last observed by the client; stale writes return 409."
               required:
-                []
+                [ ]
               additionalProperties: false
   "/api/admin/subscribers/ban":
     post:
       operationId: "banSubscribers"
       summary: "Ban or unban up to 100 default-tenant subscribers"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1437,7 +1369,7 @@ paths:
                     type: "integer"
                     minimum: 0
                 required:
-                  ["updated"]
+                  [ "updated" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1469,8 +1401,7 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Bans prevent /start and skip pending jobs. Unbanning preserves inactive state; /start is required again. Unknown chat IDs are ignored."
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1488,14 +1419,12 @@ paths:
       operationId: "getTenantUsage"
       summary: "Read default-tenant usage and quotas"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1509,7 +1438,7 @@ paths:
                   limits:
                     "$ref": "#/components/schemas/TenantLimits"
                 required:
-                  ["usage","limits"]
+                  [ "usage","limits" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1544,14 +1473,12 @@ paths:
       operationId: "listApplicationsForTenant"
       summary: "List selected tenant applications"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1565,7 +1492,7 @@ paths:
                     items:
                       "$ref": "#/components/schemas/Application"
                 required:
-                  ["applications"]
+                  [ "applications" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1596,8 +1523,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -1608,14 +1534,12 @@ paths:
       operationId: "createApplicationForTenant"
       summary: "Create application and reveal its generated key once"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "201":
           description: "Success."
@@ -1652,16 +1576,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1679,14 +1601,12 @@ paths:
       operationId: "updateApplicationForTenant"
       summary: "Rename, enable, or disable application"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1698,7 +1618,7 @@ paths:
                   application:
                     "$ref": "#/components/schemas/Application"
                 required:
-                  ["application"]
+                  [ "application" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1729,23 +1649,20 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "applicationId"
+        - name: "applicationId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1763,14 +1680,12 @@ paths:
       operationId: "rotateApplicationKeyForTenant"
       summary: "Replace application key and reveal it once"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1807,23 +1722,20 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "applicationId"
+        - name: "applicationId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1842,21 +1754,19 @@ paths:
                   minimum: 1
                   description: "Version last observed by the client; stale writes return 409."
               required:
-                []
+                [ ]
               additionalProperties: false
   "/api/admin/tenants/{tenantId}/subscribers/ban":
     post:
       operationId: "banSubscribersForTenant"
       summary: "Ban or unban up to 100 selected-tenant subscribers"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1869,7 +1779,7 @@ paths:
                     type: "integer"
                     minimum: 0
                 required:
-                  ["updated"]
+                  [ "updated" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1901,16 +1811,14 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Bans prevent /start and skip pending jobs. Unbanning preserves inactive state; /start is required again. Unknown chat IDs are ignored."
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -1928,14 +1836,12 @@ paths:
       operationId: "getTenantUsageForTenant"
       summary: "Read selected-tenant usage and quotas"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -1949,7 +1855,7 @@ paths:
                   limits:
                     "$ref": "#/components/schemas/TenantLimits"
                 required:
-                  ["usage","limits"]
+                  [ "usage","limits" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1980,8 +1886,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -1993,14 +1898,12 @@ paths:
       operationId: "adminContextForTenant"
       summary: "Read the current request's source IP and country"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2025,8 +1928,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -2038,14 +1940,12 @@ paths:
       operationId: "adminOverviewForTenant"
       summary: "Read retained totals, seven daily UTC buckets, and recent notifications"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2071,8 +1971,7 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Counts derive from retained database records. Sent means Telegram accepted delivery, not that a subscriber read it. Welcome messages are excluded from notification delivery reports."
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -2084,14 +1983,12 @@ paths:
       operationId: "getSettingsForTenant"
       summary: "Read current settings"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2116,8 +2013,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -2128,14 +2024,12 @@ paths:
       operationId: "updateSettingsForTenant"
       summary: "Merge and validate settings"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2160,16 +2054,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -2188,14 +2080,12 @@ paths:
       operationId: "listSubscribersForTenant"
       summary: "List private-chat subscribers"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2220,16 +2110,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "page"
+        - name: "page"
           in: "query"
           schema:
             type: "integer"
@@ -2237,8 +2125,7 @@ paths:
             maximum: 999999
             default: 1
           description: "One-based page; page size is fixed at 20."
-        -
-          name: "search"
+        - name: "search"
           in: "query"
           description: "Trimmed subscriber search across Telegram first name, display-name override, username, and chat ID; at most 100 characters after trimming."
           schema:
@@ -2264,10 +2151,10 @@ paths:
       operationId: "getSubscriberForTenant"
       summary: "Read a subscriber profile and access policy"
       description: "Returns private admin profile details for the selected tenant, including notes, Telegram preferences, and the independent admin application-access policy."
-      tags: ["Administration"]
+      tags: [ "Administration" ]
       security:
-        - adminSession: []
-        - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         "200":
           description: "Subscriber profile."
@@ -2297,10 +2184,10 @@ paths:
       operationId: "updateSubscriberForTenant"
       summary: "Update a subscriber profile and allowed applications"
       description: "Updates the selected tenant subscriber using optimistic concurrency. Admin permissions intersect Telegram preferences; /all cannot bypass restrictions. An empty selected allowlist permits none. Profile/access changes do not reactivate, ban, unban, or rename a Telegram account. Omitted profile fields are preserved."
-      tags: ["Administration"]
+      tags: [ "Administration" ]
       security:
-        - adminSession: []
-        - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       parameters:
         - name: "Origin"
           in: "header"
@@ -2357,14 +2244,12 @@ paths:
       operationId: "listNotificationsForTenant"
       summary: "List retained notifications"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2389,16 +2274,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "page"
+        - name: "page"
           in: "query"
           schema:
             type: "integer"
@@ -2406,22 +2289,19 @@ paths:
             maximum: 999999
             default: 1
           description: "One-based page; page size is fixed at 20."
-        -
-          name: "level"
+        - name: "level"
           in: "query"
           schema:
             type: "string"
             enum:
-              ["info","success","warning","error","critical"]
-        -
-          name: "search"
+              [ "info","success","warning","error","critical" ]
+        - name: "search"
           in: "query"
           schema:
             type: "string"
             maxLength: 100
           description: "Search application, event, or message text."
-        -
-          name: "applicationId"
+        - name: "applicationId"
           in: "query"
           schema:
             type: "string"
@@ -2431,14 +2311,12 @@ paths:
       operationId: "adminCreateNotificationForTenant"
       summary: "Broadcast from the authenticated dashboard"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "202":
           description: "Accepted record or idempotent duplicate."
@@ -2469,16 +2347,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -2486,8 +2362,7 @@ paths:
             type: "string"
             format: "uri"
             example: "https://relay.example.com"
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -2506,14 +2381,12 @@ paths:
       operationId: "adminGetNotificationForTenant"
       summary: "Read notification and up to 100 recipient delivery details"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Notification and delivery records."
@@ -2544,16 +2417,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -2564,14 +2435,12 @@ paths:
       operationId: "adminStatusForTenant"
       summary: "Read cached bot/webhook status for the selected tenant"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2596,8 +2465,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -2609,14 +2477,12 @@ paths:
       operationId: "registerTelegramWebhookForTenant"
       summary: "Register this HTTPS deployment as the bot's webhook"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2631,7 +2497,7 @@ paths:
                     type: "string"
                     format: "uri"
                 required:
-                  ["ok","url"]
+                  [ "ok","url" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -2657,16 +2523,14 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Registers /telegram/{tenantId}/webhook at this HTTPS origin for the enabled tenant. Uses private token/secret and message, my_chat_member, callback_query update types. No body required; pending Telegram updates preserved."
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
@@ -2679,14 +2543,12 @@ paths:
       operationId: "createNotificationForTenant"
       summary: "Broadcast to the current active subscriber snapshot"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "200":
           description: "Existing idempotent request; no new broadcast was created."
@@ -2723,16 +2585,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -2752,14 +2612,12 @@ paths:
       operationId: "getNotificationForTenant"
       summary: "Read a retained notification and aggregate delivery counts"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "200":
           description: "Notification with current aggregate status; recipient identities are not included."
@@ -2790,16 +2648,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "id"
+        - name: "id"
           in: "path"
           required: true
           schema:
@@ -2811,14 +2667,12 @@ paths:
       operationId: "ingestAlertmanagerForTenant"
       summary: "Expand a native Alertmanager webhook into 1–20 notifications"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "202":
           description: "Accepted records; duplicates are indicated per record."
@@ -2850,16 +2704,14 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Maps each alert separately and truncates selected text fields. Resolved alerts use success severity. Batch enqueue is sequential, not atomic: a later error can occur after earlier records were accepted. A retry without Idempotency-Key can create duplicates. When using a key, preserve the alerts array order and payload. Alertmanager's native receiver does not supply a unique event key by default. Requires an application key belonging to the selected tenant. Master admin keys are rejected."
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -2878,14 +2730,12 @@ paths:
       operationId: "ingestGrafanaForTenant"
       summary: "Normalize one native Grafana alert-group notification"
       tags:
-        ["Producer API"]
+        [ "Producer API" ]
       security:
-        -
-          bearerAuth:
-            []
-        -
-          apiKeyHeader:
-            []
+        - bearerAuth:
+            [ ]
+        - apiKeyHeader:
+            [ ]
       responses:
         "202":
           description: "Group notification accepted or found by idempotency key."
@@ -2917,16 +2767,14 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Uses title, message, status, commonLabels, and externalURL; individual alert details are not expanded. Selected strings are truncated to normalized limits. API-key authentication is required; Grafana HMAC signatures are not verified. Requires an application key belonging to the selected tenant. Master admin keys are rejected."
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Idempotency-Key"
+        - name: "Idempotency-Key"
           in: "header"
           required: false
           description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
@@ -2945,14 +2793,12 @@ paths:
       operationId: "listTenants"
       summary: "List public metadata for all tenants"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -2966,7 +2812,7 @@ paths:
                     items:
                       "$ref": "#/components/schemas/Tenant"
                 required:
-                  ["tenants"]
+                  [ "tenants" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -3000,14 +2846,12 @@ paths:
       operationId: "createTenant"
       summary: "Create isolated tenant (up to 500 per deployment)"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "201":
           description: "Success."
@@ -3019,7 +2863,7 @@ paths:
                   tenant:
                     "$ref": "#/components/schemas/Tenant"
                 required:
-                  ["tenant"]
+                  [ "tenant" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -3050,8 +2894,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -3069,14 +2912,12 @@ paths:
       operationId: "getTenant"
       summary: "Read public tenant metadata"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -3088,7 +2929,7 @@ paths:
                   tenant:
                     "$ref": "#/components/schemas/Tenant"
                 required:
-                  ["tenant"]
+                  [ "tenant" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -3119,8 +2960,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -3131,14 +2971,12 @@ paths:
       operationId: "updateTenant"
       summary: "Update tenant name, enabled state, or quotas"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -3150,7 +2988,7 @@ paths:
                   tenant:
                     "$ref": "#/components/schemas/Tenant"
                 required:
-                  ["tenant"]
+                  [ "tenant" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -3181,16 +3019,14 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -3208,14 +3044,12 @@ paths:
       operationId: "configureTenantBot"
       summary: "Verify and privately store tenant bot token"
       tags:
-        ["Administration"]
+        [ "Administration" ]
       security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+        - adminSession:
+            [ ]
+        - localAdminSession:
+            [ ]
       responses:
         "200":
           description: "Success."
@@ -3227,7 +3061,7 @@ paths:
                   tenant:
                     "$ref": "#/components/schemas/Tenant"
                 required:
-                  ["tenant"]
+                  [ "tenant" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -3275,16 +3109,14 @@ paths:
                 "$ref": "#/components/schemas/Error"
       description: "Validates with getMe and rechecks version/ownership after network completion. Never returns token. Bot identity cannot switch after assignment; same-bot token rotation preserves secret."
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
-        -
-          name: "Origin"
+        - name: "Origin"
           in: "header"
           required: true
           description: "Must exactly equal this deployment's origin, including scheme and port."
@@ -3308,18 +3140,17 @@ paths:
                   minimum: 1
                   description: "Version last observed by the client; stale writes return 409."
               required:
-                ["botToken"]
+                [ "botToken" ]
               additionalProperties: false
   "/telegram/{tenantId}/webhook":
     post:
       operationId: "telegramWebhookForTenant"
       summary: "Receive tenant Telegram subscription/preferences updates"
       tags:
-        ["Telegram"]
+        [ "Telegram" ]
       security:
-        -
-          telegramWebhookSecret:
-            []
+        - telegramWebhookSecret:
+            [ ]
       requestBody:
         required: true
         content:
@@ -3337,7 +3168,7 @@ paths:
                   ok:
                     const: true
                 required:
-                  ["ok"]
+                  [ "ok" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -3356,8 +3187,7 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
       parameters:
-        -
-          name: "tenantId"
+        - name: "tenantId"
           in: "path"
           required: true
           schema:
@@ -3403,10 +3233,10 @@ components:
               type: "string"
               description: "Human-readable message; usually Persian."
           required:
-            ["code","message"]
+            [ "code","message" ]
           additionalProperties: false
       required:
-        ["error"]
+        [ "error" ]
       additionalProperties: false
     NotificationInput:
       type: "object"
@@ -3425,7 +3255,7 @@ components:
         level:
           type: "string"
           enum:
-            ["info","success","warning","error","critical"]
+            [ "info","success","warning","error","critical" ]
           default: "info"
         timestamp:
           type: "string"
@@ -3455,20 +3285,17 @@ components:
         metadata:
           type: "object"
           maxProperties: 20
-          description: "Literal scalar key/value pairs rendered in an always-visible native monospace METADATA block. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
+          description: "Literal scalar key/value pairs rendered in an always-visible METADATA paragraph with a bold label and monospace text. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
           propertyNames:
             type: "string"
             minLength: 1
             maxLength: 40
           additionalProperties:
             oneOf:
-              -
-                type: "string"
+              - type: "string"
                 maxLength: 500
-              -
-                type: "number"
-              -
-                type: "boolean"
+              - type: "number"
+              - type: "boolean"
         tags:
           type: "array"
           items:
@@ -3480,19 +3307,18 @@ components:
           type: "boolean"
           default: false
       required:
-        ["event","text"]
+        [ "event","text" ]
       additionalProperties: false
-      description: "Application identity/name come from the header key. Unknown fields (including caller-supplied applicationId or chat_id) are rejected. Strings are trimmed and supplied text, titles, and metadata are literal; HTML/Markdown is not interpreted. The relay builds a Telegram Rich Message technical report with a Persian heading, literal body, and optional embedded photo. Always-visible native monospace blocks include CONTEXT for application/event/environment/severity and optional country flag, TIME for numeric Jalali/Gregorian dates and a shared Asia/Tehran time using ASCII digits, and optional METADATA and TAGS. There are no tables or collapsed sections. Long or Persian metadata keys and values place the value beneath its key without truncation or renderer-added hidden direction-control characters. Actions include an optional primary URL button and separate event/notification-ID copy buttons; the UUID is available only through its copy button. The 3,000-character text limit and 4,000-character full formatted plain-text validation limit are relay policy, not Telegram Rich Message limits. Rendering depends on Telegram client support; no minimum client version or automatic fallback is guaranteed. See https://core.telegram.org/bots/api#sendrichmessage and https://core.telegram.org/bots/features#messages-and-formatting."
+      description: "Application identity/name come from the header key. Unknown fields (including caller-supplied applicationId or chat_id) are rejected. Strings are trimmed and supplied text, titles, and metadata are literal; HTML/Markdown is not interpreted. The relay builds a Telegram Rich Message technical report with an English severity heading (Info, Success, Warning, Error, or Critical) unless a literal title is supplied, literal body, and optional embedded photo. Always-visible paragraphs with bold section labels and monospace text include CONTEXT for application/event/environment/severity and optional country flag, TIME for numeric Jalali/Gregorian dates and a shared Asia/Tehran time using ASCII digits, and optional METADATA and TAGS. Technical sections use RichTextCode inside paragraphs instead of pre blocks to avoid the preformatted block accent background. Colors remain client/theme-dependent; per-level section background colors are not exposed by the API. There are no tables or collapsed sections. Long or Persian metadata keys and values place the value beneath its key without truncation or renderer-added hidden direction-control characters. Actions include an optional primary URL button and separate event/notification-ID copy buttons; the UUID is available only through its copy button. The 3,000-character text limit and 4,000-character full formatted plain-text validation limit are relay policy, not Telegram Rich Message limits. Rendering depends on Telegram client support; no minimum client version or automatic fallback is guaranteed. See https://core.telegram.org/bots/api#sendrichmessage and https://core.telegram.org/bots/features#messages-and-formatting."
       examples:
-        -
-          event: "deployment.completed"
+        - event: "deployment.completed"
           level: "success"
           text: "Version 2.4.1 is healthy."
           environment: "production"
           metadata:
             version: "2.4.1"
           tags:
-            ["deploy"]
+            [ "deploy" ]
     NotificationRecord:
       type: "object"
       properties:
@@ -3512,7 +3338,7 @@ components:
         level:
           type: "string"
           enum:
-            ["info","success","warning","error","critical"]
+            [ "info","success","warning","error","critical" ]
           default: "info"
         timestamp:
           type: "string"
@@ -3542,20 +3368,17 @@ components:
         metadata:
           type: "object"
           maxProperties: 20
-          description: "Literal scalar key/value pairs rendered in an always-visible native monospace METADATA block. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
+          description: "Literal scalar key/value pairs rendered in an always-visible METADATA paragraph with a bold label and monospace text. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
           propertyNames:
             type: "string"
             minLength: 1
             maxLength: 40
           additionalProperties:
             oneOf:
-              -
-                type: "string"
+              - type: "string"
                 maxLength: 500
-              -
-                type: "number"
-              -
-                type: "boolean"
+              - type: "number"
+              - type: "boolean"
         tags:
           type: "array"
           items:
@@ -3577,7 +3400,7 @@ components:
         status:
           type: "string"
           enum:
-            ["queued","sending","completed","partial","failed","empty"]
+            [ "queued","sending","completed","partial","failed","empty" ]
         total:
           type: "integer"
           minimum: 0
@@ -3603,7 +3426,7 @@ components:
           maxLength: 48
           description: "Authenticated application identity. Older legacy history may omit it."
       required:
-        ["application","event","text","level","timestamp","id","createdAt","source","status","total","sent","failed","pending","unknown","skipped"]
+        [ "application","event","text","level","timestamp","id","createdAt","source","status","total","sent","failed","pending","unknown","skipped" ]
       additionalProperties: false
     Acceptance:
       type: "object"
@@ -3613,7 +3436,7 @@ components:
         duplicate:
           type: "boolean"
       required:
-        ["notification","duplicate"]
+        [ "notification","duplicate" ]
       additionalProperties: false
     NotificationDetail:
       type: "object"
@@ -3621,7 +3444,7 @@ components:
         notification:
           "$ref": "#/components/schemas/NotificationRecord"
       required:
-        ["notification"]
+        [ "notification" ]
       additionalProperties: false
     BatchAcceptance:
       type: "object"
@@ -3632,7 +3455,7 @@ components:
             "$ref": "#/components/schemas/Acceptance"
           maxItems: 20
       required:
-        ["notifications"]
+        [ "notifications" ]
       additionalProperties: false
     SourceContext:
       type: "object"
@@ -3646,9 +3469,9 @@ components:
         source:
           type: "string"
           enum:
-            ["api","admin","alertmanager","grafana"]
+            [ "api","admin","alertmanager","grafana" ]
       required:
-        ["ip","country","source"]
+        [ "ip","country","source" ]
       additionalProperties: false
     Settings:
       type: "object"
@@ -3665,7 +3488,7 @@ components:
         ipMode:
           type: "string"
           enum:
-            ["off","allow","deny"]
+            [ "off","allow","deny" ]
           default: "off"
         ipRules:
           type: "array"
@@ -3678,7 +3501,7 @@ components:
         countryMode:
           type: "string"
           enum:
-            ["off","allow","deny"]
+            [ "off","allow","deny" ]
           default: "off"
         countries:
           type: "array"
@@ -3709,7 +3532,7 @@ components:
           minLength: 0
           description: "Welcome text for a new/reactivated private /start subscription. An empty string disables the welcome message."
       required:
-        ["projectName","paused","ipMode","ipRules","countryMode","countries","showCountryFlag","deliveryPerSecond","retentionDays","welcomeMessage"]
+        [ "projectName","paused","ipMode","ipRules","countryMode","countries","showCountryFlag","deliveryPerSecond","retentionDays","welcomeMessage" ]
       additionalProperties: false
     SettingsUpdate:
       type: "object"
@@ -3726,7 +3549,7 @@ components:
         ipMode:
           type: "string"
           enum:
-            ["off","allow","deny"]
+            [ "off","allow","deny" ]
           default: "off"
         ipRules:
           type: "array"
@@ -3739,7 +3562,7 @@ components:
         countryMode:
           type: "string"
           enum:
-            ["off","allow","deny"]
+            [ "off","allow","deny" ]
           default: "off"
         countries:
           type: "array"
@@ -3770,7 +3593,7 @@ components:
           minLength: 0
           description: "Welcome text for a new/reactivated private /start subscription. An empty string disables the welcome message."
       required:
-        []
+        [ ]
       additionalProperties: false
       description: "Partial settings update; omitted fields retain their current values. Unknown fields are rejected. Settings are validated as a complete merged object."
     Subscriber:
@@ -3782,7 +3605,7 @@ components:
           type: "string"
         username:
           type:
-            ["string","null"]
+            [ "string","null" ]
         active:
           type: "boolean"
         joinedAt:
@@ -3795,11 +3618,11 @@ components:
           type: "boolean"
         banReason:
           type:
-            ["string","null"]
+            [ "string","null" ]
         applicationMode:
           type: "string"
           enum:
-            ["all","selected"]
+            [ "all","selected" ]
           description: "Subscriber-controlled Telegram preference. all means every application permitted by the admin access policy."
         applicationIds:
           type: "array"
@@ -3809,7 +3632,7 @@ components:
             maxLength: 48
         displayName:
           type:
-            ["string","null"]
+            [ "string","null" ]
           maxLength: 80
           description: "Admin display-name override. null uses the Telegram name; this never changes firstName, username, or chatId."
         notes:
@@ -3819,7 +3642,7 @@ components:
         accessMode:
           type: "string"
           enum:
-            ["all","selected"]
+            [ "all","selected" ]
           default: "all"
           description: "Admin access policy. all permits current and future applications; selected permits only allowedApplicationIds. /all cannot bypass this policy."
         allowedApplicationIds:
@@ -3836,7 +3659,7 @@ components:
           minimum: 1
           description: "Version for administrative profile/access edits. Supply this as expectedVersion when patching. Telegram identity and preference updates do not advance it."
       required:
-        ["chatId","firstName","username","active","joinedAt","updatedAt","banned","banReason","applicationMode","applicationIds","displayName","notes","accessMode","allowedApplicationIds","version"]
+        [ "chatId","firstName","username","active","joinedAt","updatedAt","banned","banReason","applicationMode","applicationIds","displayName","notes","accessMode","allowedApplicationIds","version" ]
       additionalProperties: false
       description: "Admin-only subscriber profile. New and existing subscribers default to accessMode all. Profile/access edits preserve Telegram identity, user preferences, subscription activity, and ban state."
     SubscriberDetail:
@@ -3845,7 +3668,7 @@ components:
         subscriber:
           "$ref": "#/components/schemas/Subscriber"
       required:
-        ["subscriber"]
+        [ "subscriber" ]
       additionalProperties: false
     SubscriberUpdate:
       type: "object"
@@ -3856,7 +3679,7 @@ components:
           description: "Required latest subscriber version. Read the subscriber again before resolving a stale-write conflict."
         displayName:
           type:
-            ["string","null"]
+            [ "string","null" ]
           maxLength: 80
           description: "Admin display-name override. Leading/trailing whitespace is trimmed; blank or null clears the override."
         notes:
@@ -3866,7 +3689,7 @@ components:
         accessMode:
           type: "string"
           enum:
-            ["all","selected"]
+            [ "all","selected" ]
         allowedApplicationIds:
           type: "array"
           maxItems: 100
@@ -3878,17 +3701,16 @@ components:
             pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
           description: "Unique application IDs belonging to this tenant. Existing disabled applications may be stored but cannot deliver. selected with [] explicitly denies all applications."
       required:
-        ["expectedVersion"]
+        [ "expectedVersion" ]
       dependentRequired:
         accessMode:
-          ["allowedApplicationIds"]
+          [ "allowedApplicationIds" ]
         allowedApplicationIds:
-          ["accessMode"]
+          [ "accessMode" ]
       allOf:
-        -
-          if:
+        - if:
             required:
-              ["accessMode"]
+              [ "accessMode" ]
             properties:
               accessMode:
                 const: "all"
@@ -3899,13 +3721,12 @@ components:
       additionalProperties: false
       description: "Partial admin profile/access update; omitted profile fields retain their values. accessMode and allowedApplicationIds must be supplied together; all requires []. This policy intersects the subscriber's Telegram preferences. The request cannot change Telegram identity, preference fields, active status, or bans; use the existing ban endpoint for bans."
       examples:
-        -
-          expectedVersion: 1
+        - expectedVersion: 1
           displayName: "On-call engineer"
           notes: "Receives production payment alerts."
           accessMode: "selected"
           allowedApplicationIds:
-            ["payments-api"]
+            [ "payments-api" ]
     SubscriberPage:
       type: "object"
       properties:
@@ -3923,7 +3744,7 @@ components:
           type: "integer"
           const: 20
       required:
-        ["items","total","page","pageSize"]
+        [ "items","total","page","pageSize" ]
       additionalProperties: false
     NotificationPage:
       type: "object"
@@ -3942,7 +3763,7 @@ components:
           type: "integer"
           const: 20
       required:
-        ["items","total","page","pageSize"]
+        [ "items","total","page","pageSize" ]
       additionalProperties: false
     Delivery:
       type: "object"
@@ -3952,13 +3773,13 @@ components:
         status:
           type: "string"
           enum:
-            ["pending","sending","sent","failed","unknown","skipped"]
+            [ "pending","sending","sent","failed","unknown","skipped" ]
         attempts:
           type: "integer"
           minimum: 0
         error:
           type:
-            ["string","null"]
+            [ "string","null" ]
         stage:
           type: "integer"
           minimum: 0
@@ -3968,7 +3789,7 @@ components:
           type: "boolean"
           description: "Legacy split-delivery state: a photo was accepted but the whole notification has not completed."
       required:
-        ["chatId","status","attempts","error","stage","partial"]
+        [ "chatId","status","attempts","error","stage","partial" ]
       additionalProperties: false
     AdminNotificationDetail:
       type: "object"
@@ -3985,7 +3806,7 @@ components:
           maxItems: 100
           description: "First 100 recipient records in insertion order. Compare deliveryTotal to detect truncation."
       required:
-        ["notification","deliveryTotal","deliveries"]
+        [ "notification","deliveryTotal","deliveries" ]
       additionalProperties: false
     Overview:
       type: "object"
@@ -4000,7 +3821,7 @@ components:
               type: "integer"
               minimum: 0
           required:
-            ["total","active"]
+            [ "total","active" ]
           additionalProperties: false
         notifications:
           type: "object"
@@ -4012,7 +3833,7 @@ components:
               type: "integer"
               minimum: 0
           required:
-            ["total","today"]
+            [ "total","today" ]
           additionalProperties: false
         deliveries:
           type: "object"
@@ -4033,7 +3854,7 @@ components:
               type: "integer"
               minimum: 0
           required:
-            ["sent","failed","pending","unknown","skipped"]
+            [ "sent","failed","pending","unknown","skipped" ]
           additionalProperties: false
         daily:
           type: "array"
@@ -4050,7 +3871,7 @@ components:
                 type: "integer"
                 minimum: 0
             required:
-              ["date","sent","failed"]
+              [ "date","sent","failed" ]
             additionalProperties: false
           maxItems: 7
         levels:
@@ -4061,12 +3882,12 @@ components:
               level:
                 type: "string"
                 enum:
-                  ["info","success","warning","error","critical"]
+                  [ "info","success","warning","error","critical" ]
               count:
                 type: "integer"
                 minimum: 0
             required:
-              ["level","count"]
+              [ "level","count" ]
             additionalProperties: false
           maxItems: 5
         recent:
@@ -4075,7 +3896,7 @@ components:
             "$ref": "#/components/schemas/NotificationRecord"
           maxItems: 6
       required:
-        ["subscribers","notifications","deliveries","daily","levels","recent"]
+        [ "subscribers","notifications","deliveries","daily","levels","recent" ]
       additionalProperties: false
     AdminStatus:
       type: "object"
@@ -4092,16 +3913,16 @@ components:
               type: "boolean"
               description: "At least one enabled application has a producer credential."
           required:
-            ["bot","webhookSecret","apiKey"]
+            [ "bot","webhookSecret","apiKey" ]
           additionalProperties: false
         bot:
           type:
-            ["object","null"]
+            [ "object","null" ]
           additionalProperties: true
           description: "Telegram getMe result, or null if unavailable."
         webhook:
           type:
-            ["object","null"]
+            [ "object","null" ]
           additionalProperties: true
           description: "Telegram getWebhookInfo result, or null if unavailable."
         telegramError:
@@ -4111,7 +3932,7 @@ components:
           type: "string"
           format: "date-time"
       required:
-        ["configured","bot","webhook","checkedAt"]
+        [ "configured","bot","webhook","checkedAt" ]
       additionalProperties: false
       description: "Cached for 60 seconds with concurrent refresh coalescing and mutation invalidation. No bot tokens/webhook secrets are included."
     AlertmanagerWebhook:
@@ -4126,7 +3947,7 @@ components:
         status:
           type: "string"
           enum:
-            ["firing","resolved"]
+            [ "firing","resolved" ]
         receiver:
           type: "string"
         groupLabels:
@@ -4151,7 +3972,7 @@ components:
           type: "integer"
           minimum: 0
       required:
-        ["alerts"]
+        [ "alerts" ]
       additionalProperties: true
     AlertmanagerAlert:
       type: "object"
@@ -4159,7 +3980,7 @@ components:
         status:
           type: "string"
           enum:
-            ["firing","resolved"]
+            [ "firing","resolved" ]
         labels:
           type: "object"
           additionalProperties:
@@ -4181,7 +4002,7 @@ components:
         fingerprint:
           type: "string"
       required:
-        []
+        [ ]
       additionalProperties: true
     GrafanaWebhook:
       type: "object"
@@ -4189,7 +4010,7 @@ components:
         status:
           type: "string"
           enum:
-            ["firing","resolved"]
+            [ "firing","resolved" ]
         title:
           type: "string"
         message:
@@ -4207,7 +4028,7 @@ components:
             type: "object"
             additionalProperties: true
       required:
-        []
+        [ ]
       additionalProperties: true
     TelegramUpdate:
       type: "object"
@@ -4229,7 +4050,7 @@ components:
       type: "string"
       description: "ISO 3166-1 alpha-2 codes supported by the relay. Unknown/pseudo-countries are excluded."
       enum:
-        ["AD","AE","AF","AG","AI","AL","AM","AO","AQ","AR","AS","AT","AU","AW","AX","AZ","BA","BB","BD","BE","BF","BG","BH","BI","BJ","BL","BM","BN","BO","BQ","BR","BS","BT","BV","BW","BY","BZ","CA","CC","CD","CF","CG","CH","CI","CK","CL","CM","CN","CO","CR","CU","CV","CW","CX","CY","CZ","DE","DJ","DK","DM","DO","DZ","EC","EE","EG","EH","ER","ES","ET","FI","FJ","FK","FM","FO","FR","GA","GB","GD","GE","GF","GG","GH","GI","GL","GM","GN","GP","GQ","GR","GS","GT","GU","GW","GY","HK","HM","HN","HR","HT","HU","ID","IE","IL","IM","IN","IO","IQ","IR","IS","IT","JE","JM","JO","JP","KE","KG","KH","KI","KM","KN","KP","KR","KW","KY","KZ","LA","LB","LC","LI","LK","LR","LS","LT","LU","LV","LY","MA","MC","MD","ME","MF","MG","MH","MK","ML","MM","MN","MO","MP","MQ","MR","MS","MT","MU","MV","MW","MX","MY","MZ","NA","NC","NE","NF","NG","NI","NL","NO","NP","NR","NU","NZ","OM","PA","PE","PF","PG","PH","PK","PL","PM","PN","PR","PS","PT","PW","PY","QA","RE","RO","RS","RU","RW","SA","SB","SC","SD","SE","SG","SH","SI","SJ","SK","SL","SM","SN","SO","SR","SS","ST","SV","SX","SY","SZ","TC","TD","TF","TG","TH","TJ","TK","TL","TM","TN","TO","TR","TT","TV","TW","TZ","UA","UG","UM","US","UY","UZ","VA","VC","VE","VG","VI","VN","VU","WF","WS","YE","YT","ZA","ZM","ZW"]
+        [ "AD","AE","AF","AG","AI","AL","AM","AO","AQ","AR","AS","AT","AU","AW","AX","AZ","BA","BB","BD","BE","BF","BG","BH","BI","BJ","BL","BM","BN","BO","BQ","BR","BS","BT","BV","BW","BY","BZ","CA","CC","CD","CF","CG","CH","CI","CK","CL","CM","CN","CO","CR","CU","CV","CW","CX","CY","CZ","DE","DJ","DK","DM","DO","DZ","EC","EE","EG","EH","ER","ES","ET","FI","FJ","FK","FM","FO","FR","GA","GB","GD","GE","GF","GG","GH","GI","GL","GM","GN","GP","GQ","GR","GS","GT","GU","GW","GY","HK","HM","HN","HR","HT","HU","ID","IE","IL","IM","IN","IO","IQ","IR","IS","IT","JE","JM","JO","JP","KE","KG","KH","KI","KM","KN","KP","KR","KW","KY","KZ","LA","LB","LC","LI","LK","LR","LS","LT","LU","LV","LY","MA","MC","MD","ME","MF","MG","MH","MK","ML","MM","MN","MO","MP","MQ","MR","MS","MT","MU","MV","MW","MX","MY","MZ","NA","NC","NE","NF","NG","NI","NL","NO","NP","NR","NU","NZ","OM","PA","PE","PF","PG","PH","PK","PL","PM","PN","PR","PS","PT","PW","PY","QA","RE","RO","RS","RU","RW","SA","SB","SC","SD","SE","SG","SH","SI","SJ","SK","SL","SM","SN","SO","SR","SS","ST","SV","SX","SY","SZ","TC","TD","TF","TG","TH","TJ","TK","TL","TM","TN","TO","TR","TT","TV","TW","TZ","UA","UG","UM","US","UY","UZ","VA","VC","VE","VG","VI","VN","VU","WF","WS","YE","YT","ZA","ZM","ZW" ]
     AdminNotificationInput:
       type: "object"
       properties:
@@ -4247,7 +4068,7 @@ components:
         level:
           type: "string"
           enum:
-            ["info","success","warning","error","critical"]
+            [ "info","success","warning","error","critical" ]
           default: "info"
         timestamp:
           type: "string"
@@ -4277,20 +4098,17 @@ components:
         metadata:
           type: "object"
           maxProperties: 20
-          description: "Literal scalar key/value pairs rendered in an always-visible native monospace METADATA block. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
+          description: "Literal scalar key/value pairs rendered in an always-visible METADATA paragraph with a bold label and monospace text. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
           propertyNames:
             type: "string"
             minLength: 1
             maxLength: 40
           additionalProperties:
             oneOf:
-              -
-                type: "string"
+              - type: "string"
                 maxLength: 500
-              -
-                type: "number"
-              -
-                type: "boolean"
+              - type: "number"
+              - type: "boolean"
         tags:
           type: "array"
           items:
@@ -4306,19 +4124,18 @@ components:
           minLength: 2
           maxLength: 48
       required:
-        ["applicationId","event","text"]
+        [ "applicationId","event","text" ]
       additionalProperties: false
       description: "Dashboard broadcasts require an enabled applicationId in this tenant. Its configured name replaces application. Content remains literal and uses the same relay-generated Telegram Rich Message layout as producer notifications. The 3,000-character text and 4,000-character full formatted plain-text validation limits also apply."
       examples:
-        -
-          event: "deployment.completed"
+        - event: "deployment.completed"
           level: "success"
           text: "Version 2.4.1 is healthy."
           environment: "production"
           metadata:
             version: "2.4.1"
           tags:
-            ["deploy"]
+            [ "deploy" ]
           applicationId: "payments-api"
     TenantLimits:
       type: "object"
@@ -4344,7 +4161,7 @@ components:
           maximum: 1000000
           default: 100000
       required:
-        ["requestsPerMinute","notificationsPerDay","maxSubscribers","maxPendingDeliveries"]
+        [ "requestsPerMinute","notificationsPerDay","maxSubscribers","maxPendingDeliveries" ]
       additionalProperties: false
     TenantLimitsUpdate:
       type: "object"
@@ -4370,7 +4187,7 @@ components:
           maximum: 1000000
           default: 100000
       required:
-        []
+        [ ]
       additionalProperties: false
     Tenant:
       type: "object"
@@ -4402,12 +4219,12 @@ components:
           type: "boolean"
         botId:
           type:
-            ["string","null"]
+            [ "string","null" ]
         botUsername:
           type:
-            ["string","null"]
+            [ "string","null" ]
       required:
-        ["id","name","enabled","isDefault","createdAt","updatedAt","version","limits","botConfigured","botId","botUsername"]
+        [ "id","name","enabled","isDefault","createdAt","updatedAt","version","limits","botConfigured","botId","botUsername" ]
       additionalProperties: false
     TenantCreate:
       type: "object"
@@ -4424,7 +4241,7 @@ components:
         limits:
           "$ref": "#/components/schemas/TenantLimitsUpdate"
       required:
-        ["id","name"]
+        [ "id","name" ]
       additionalProperties: false
     TenantUpdate:
       type: "object"
@@ -4442,7 +4259,7 @@ components:
           minimum: 1
           description: "Version last observed by the client; stale writes return 409."
       required:
-        []
+        [ ]
       additionalProperties: false
     Application:
       type: "object"
@@ -4471,7 +4288,7 @@ components:
           type: "boolean"
         audienceMode:
           type: "string"
-          enum: ["all","selected"]
+          enum: [ "all","selected" ]
           description: "Application audience. all permits current and future subscribers; selected permits only audienceChatIds. The subscriber admin access policy and Telegram preferences must also allow delivery."
         audienceChatIds:
           "$ref": "#/components/schemas/ApplicationAudienceChatIds"
@@ -4479,7 +4296,7 @@ components:
           type: "boolean"
           description: "Whether eligible subscribers can see this application in /apps. Hiding it does not itself block otherwise-authorized delivery."
       required:
-        ["id","name","enabled","createdAt","updatedAt","version","isLegacy","keyConfigured","audienceMode","audienceChatIds","showInDirectory"]
+        [ "id","name","enabled","createdAt","updatedAt","version","isLegacy","keyConfigured","audienceMode","audienceChatIds","showInDirectory" ]
       additionalProperties: false
     ApplicationCreate:
       type: "object"
@@ -4493,18 +4310,18 @@ components:
           maxLength: 80
         audienceMode:
           type: "string"
-          enum: ["all","selected"]
+          enum: [ "all","selected" ]
           default: "all"
           description: "Application audience. all permits current and future subscribers; selected permits only audienceChatIds. The subscriber admin access policy and Telegram preferences must also allow delivery."
         audienceChatIds:
           "$ref": "#/components/schemas/ApplicationAudienceChatIds"
-          default: []
+          default: [ ]
         showInDirectory:
           type: "boolean"
           default: true
           description: "Whether eligible subscribers can see this application in /apps. Hiding it does not itself block otherwise-authorized delivery."
       required:
-        ["id","name"]
+        [ "id","name" ]
       allOf:
         - if:
             properties:
@@ -4531,7 +4348,7 @@ components:
           description: "Version last observed by the client; stale writes return 409."
         audienceMode:
           type: "string"
-          enum: ["all","selected"]
+          enum: [ "all","selected" ]
           description: "Application audience. all permits current and future subscribers; selected permits only audienceChatIds. The subscriber admin access policy and Telegram preferences must also allow delivery."
         audienceChatIds:
           "$ref": "#/components/schemas/ApplicationAudienceChatIds"
@@ -4539,10 +4356,10 @@ components:
           type: "boolean"
           description: "Whether eligible subscribers can see this application in /apps. Hiding it does not itself block otherwise-authorized delivery."
       required:
-        []
+        [ ]
       dependentRequired:
-        audienceMode: ["audienceChatIds"]
-        audienceChatIds: ["audienceMode"]
+        audienceMode: [ "audienceChatIds" ]
+        audienceChatIds: [ "audienceMode" ]
       allOf:
         - if:
             properties:
@@ -4571,7 +4388,7 @@ components:
           type: "string"
           description: "Full generated application key, shown only in create/rotate response. Only its hash persists."
       required:
-        ["application","apiKey"]
+        [ "application","apiKey" ]
       additionalProperties: false
     TenantUsage:
       type: "object"
@@ -4589,7 +4406,7 @@ components:
           type: "integer"
           minimum: 0
       required:
-        ["day","notificationsToday","activeSubscribers","pendingDeliveries"]
+        [ "day","notificationsToday","activeSubscribers","pendingDeliveries" ]
       additionalProperties: false
     BanInput:
       type: "object"
@@ -4607,7 +4424,7 @@ components:
           type: "string"
           maxLength: 200
       required:
-        ["chatIds","banned"]
+        [ "chatIds","banned" ]
       additionalProperties: false
   responses:
     BadRequest:

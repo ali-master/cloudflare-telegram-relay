@@ -38,24 +38,37 @@ describe('Telegram rich notification content', () => {
     expect(message).not.toHaveProperty('html');
     expect(message).not.toHaveProperty('markdown');
     expect(message.blocks).toContainEqual({type: 'heading', size: 3, text: '✅ انتشار موفق'});
-    const context = message.blocks.find(block => block.type === 'pre' && block.text.startsWith('CONTEXT\n'));
-    expect(context).toEqual({type: 'pre', text: 'CONTEXT\n\napp    : Payments\nevent  : deploy.succeeded\nenv    : production\nlevel  : success\norigin : 🇩🇪 DE'});
-    const time = message.blocks.find(block => block.type === 'pre' && block.text.startsWith('TIME\n'));
-    expect(time).toEqual({type: 'pre', text: 'TIME\n\njalali    : 1405/06/21\ngregorian : 2026-09-12\ntime      : 14:00:00\nzone      : Asia/Tehran'});
+    expect(message.blocks).toContainEqual({type: 'paragraph', text: [
+      '\n', {type: 'bold', text: 'CONTEXT'}, '\n\n',
+      {type: 'code', text: 'app    : Payments\nevent  : deploy.succeeded\nenv    : production\nlevel  : success\norigin : 🇩🇪 DE'},
+    ]});
+    expect(message.blocks).toContainEqual({type: 'paragraph', text: [
+      '\n', {type: 'bold', text: 'TIME'}, '\n\n',
+      {type: 'code', text: 'jalali    : 1405/06/21\ngregorian : 2026-09-12\ntime      : 14:00:00\nzone      : Asia/Tehran'},
+    ]});
     const serialized = JSON.stringify(message);
     expect(serialized).toContain('🇩🇪');
     expect(serialized).not.toContain(source.ip);
     expect(serialized).not.toContain('SUCCESS');
     expect(serialized).not.toContain('"type":"table"');
     expect(serialized).not.toContain('"type":"details"');
+    expect(serialized).not.toContain('"type":"pre"');
     expect(message.blocks.filter(block => block.type !== 'buttons').some(block => JSON.stringify(block).includes(notificationId))).toBe(false);
     expect(message.blocks.length).toBeLessThanOrEqual(6);
   });
 
-  it.each(LEVELS)('gives %s notifications a visible severity', level => {
-    const message = formatRichNotification({...input, level});
-    expect(message.blocks[0]).toMatchObject({type: 'heading', text: expect.stringMatching(/^(ℹ️|✅|⚠️|🔴|🚨) /u)});
+  it.each(LEVELS)('gives %s notifications an English severity title', level => {
+    const headings = {
+      info: 'ℹ️ Info',
+      success: '✅ Success',
+      warning: '⚠️ Warning',
+      error: '🔴 Error',
+      critical: '🚨 Critical',
+    };
+    const message = formatRichNotification({...input, level, metadata: {sample: true}, tags: ['test']});
+    expect(message.blocks[0]).toEqual({type: 'heading', size: 3, text: headings[level]});
     expect(JSON.stringify(message)).not.toContain(level.toUpperCase());
+    expect(JSON.stringify(message)).not.toContain('"type":"pre"');
   });
 
   it('preserves HTML, Markdown, mentions and control-like strings as data', () => {
@@ -102,8 +115,13 @@ describe('Telegram rich notification content', () => {
       metadata: {duration: 0, failed: false, commit: longValue},
       tags: ['production', 'ci/cd']
     });
-    expect(message.blocks).toContainEqual({type: 'pre', text: `METADATA\n\nduration : 0\nfailed   : false\ncommit:\n${longValue}`});
-    expect(message.blocks).toContainEqual({type: 'pre', text: 'TAGS\n\nproduction\nci/cd'});
+    expect(message.blocks).toContainEqual({type: 'paragraph', text: [
+      '\n', {type: 'bold', text: 'METADATA'}, '\n\n',
+      {type: 'code', text: `duration : 0\nfailed   : false\ncommit:\n${longValue}`},
+    ]});
+    expect(message.blocks).toContainEqual({type: 'paragraph', text: [
+      '\n', {type: 'bold', text: 'TAGS'}, '\n\n', {type: 'code', text: 'production\nci/cd'},
+    ]});
   });
 
   it('omits missing optional sections and hides country when disabled or unknown', () => {
@@ -111,7 +129,7 @@ describe('Telegram rich notification content', () => {
       const message = formatRichNotification(input, {...source, country}, enabled);
       expect(JSON.stringify(message)).not.toContain('origin :');
       expect(message.blocks.some(block => block.type === 'photo')).toBe(false);
-      expect(message.blocks.filter(block => block.type === 'pre')).toHaveLength(2);
+      expect(message.blocks.filter(block => block.type === 'paragraph' && Array.isArray(block.text))).toHaveLength(2);
       expect(message.blocks.flatMap(block => block.type === 'buttons' ? block.buttons : [])).toHaveLength(1);
     }
   });
@@ -120,7 +138,8 @@ describe('Telegram rich notification content', () => {
     const value = 'مقدار فارسی\nخط دوم';
     const key = 'technical-key-that-is-longer-than-twelve';
     const message = formatRichNotification({...input, application: 'پرداخت', metadata: {[key]: 'original-value', 'شناسه': value}});
-    const content = message.blocks.filter(block => block.type === 'pre').map(block => block.text).join('\n');
+    const content = message.blocks.flatMap(block => block.type === 'paragraph' && Array.isArray(block.text) ? block.text : [])
+      .flatMap(text => typeof text === 'object' && !Array.isArray(text) && text.type === 'code' ? [text.text] : []).join('\n');
     expect(content).toContain('app:\nپرداخت');
     expect(content).toContain(`${key}:\noriginal-value`);
     expect(content).toContain(`شناسه:\n${value}`);
