@@ -1,0 +1,90 @@
+/* The API guide shares the dashboard's light and dark semantic colors. */
+#panel-api .api-tenant-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px 30px;
+  padding: 22px;
+  margin-bottom: 16px;
+  background: linear-gradient(120deg, var(--surface), var(--surface-tinted));
+  border-color: var(--border-strong);
+}
+.api-tenant-identity { flex: 1 1 250px; min-width: 0; }
+.api-tenant-identity .eyebrow { color: var(--accent); font-size: 8px; letter-spacing: 1.1px; }
+.api-tenant-identity h2 { margin: 7px 0 5px; font-size: 20px; font-weight: 600; line-height: 1.8; overflow-wrap: anywhere; }
+.api-tenant-identity p { margin: 0; font-size: 10px; line-height: 2; }
+.api-tenant-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 24px;
+  margin: 0;
+  min-width: 230px;
+  max-width: 100%;
+}
+.api-tenant-facts > div { min-width: 0; }
+.api-tenant-facts dt { color: var(--muted); font-size: 9px; line-height: 1.9; }
+.api-tenant-facts dd { margin: 6px 0 0; color: var(--text); font-size: 11px; line-height: 1.9; overflow-wrap: anywhere; }
+.api-tenant-facts > dt { align-self: center; }
+.api-tenant-facts > dd { margin: 0; }
+.api-tenant-facts code { display: inline-block; direction: ltr; color: var(--accent); font-size: 11px; overflow-wrap: anywhere; }
+#panel-api .api-guide-notice { margin: 0 0 22px; }
+.api-guide-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; margin-top: 7px; }
+.api-guide-actions .text-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 3px 0; font-size: 10px; text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 4px; }
+.api-guide-actions .text-button:hover { color: var(--accent); text-decoration-color: currentColor; }
+.api-guide-actions .icon { width: 13px; height: 13px; }
+#panel-api .api-guide-section { margin-bottom: 22px; }
+#panel-api .api-grid,
+.api-track-grid { min-width: 0; }
+.api-track-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; margin-bottom: 22px; align-items: start; }
+#panel-api .card { min-width: 0; max-width: 100%; }
+#panel-api .card-header > div { min-width: 0; }
+#panel-api .card-header h2 { line-height: 1.9; }
+#panel-api .card-header p { line-height: 1.9; }
+#panel-api .card-header .icon-button { flex-shrink: 0; }
+#panel-api .endpoint { min-width: 0; align-items: flex-start; line-height: 2; background: var(--surface-soft); color: var(--text-soft); }
+#panel-api .endpoint > span { flex-shrink: 0; color: var(--success-fg); background: var(--success-bg); border: 1px solid var(--success-border); line-height: 1.7; }
+#panel-api .endpoint code { display: block; min-width: 0; white-space: normal; overflow-wrap: anywhere; word-break: normal; direction: ltr; text-align: left; }
+#panel-api pre { min-width: 0; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; white-space: pre; direction: ltr; text-align: left; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+#panel-api pre:focus-visible { outline: 2px solid var(--select-ring); outline-offset: -3px; }
+#panel-api .api-code-note { overflow-wrap: anywhere; }
+.api-response-body { padding: 0 22px 22px; min-width: 0; }
+.api-response-body > p { margin: 0 0 13px; color: var(--muted); font-size: 10px; line-height: 2; }
+.api-response-body pre { margin: 0 0 18px; padding: 17px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-inset); color: var(--text-soft); font-size: 10px; line-height: 2.1; tab-size: 2; }
+.api-status-notes { display: grid; gap: 10px; margin: 0; padding: 0 18px 0 0; color: var(--muted); font-size: 10px; line-height: 2; }
+.api-status-notes li { min-width: 0; padding-inline-start: 3px; overflow-wrap: anywhere; }
+.api-status-notes li::marker { color: var(--accent); }
+.api-status-notes strong { color: var(--text-soft); font-weight: 500; }
+.api-status-notes code { color: var(--accent); font-size: 10px; direction: ltr; unicode-bidi: isolate; }
+#panel-api .api-fields td { line-height: 2; vertical-align: top; }
+#panel-api .api-fields td:last-child { min-width: 180px; overflow-wrap: anywhere; }
+.api-header-table td:first-child { min-width: 160px; }
+.api-limit-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 22px 18px; margin: 0; list-style: none; }
+.api-limit-list .badge { white-space: normal; overflow-wrap: anywhere; line-height: 1.9; padding: 5px 9px; }
+.api-limit-list .badge::before { flex-shrink: 0; }
+
+@media (max-width: 1100px) {
+  .api-track-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 590px) {
+  #panel-api .api-tenant-context { padding: 18px 17px; gap: 17px; }
+  .api-tenant-identity { flex-basis: 100%; }
+  .api-tenant-identity h2 { font-size: 18px; margin-top: 5px; }
+  .api-tenant-identity p { font-size: 9px; }
+  .api-tenant-facts { width: 100%; min-width: 0; gap: 8px 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .api-tenant-facts dt { font-size: 8px; }
+  .api-tenant-facts dd, .api-tenant-facts code { font-size: 10px; }
+  #panel-api .api-guide-notice,
+  #panel-api .api-guide-section,
+  .api-track-grid { margin-bottom: 17px; }
+  .api-track-grid { gap: 17px; }
+  .api-guide-actions { gap: 3px 14px; }
+  .api-guide-actions .text-button { font-size: 9px; min-height: 36px; }
+  .api-response-body { padding: 0 17px 18px; }
+  .api-response-body > p, .api-status-notes { font-size: 9px; }
+  .api-response-body pre { padding: 14px; font-size: 9px; margin-bottom: 15px; }
+  #panel-api .endpoint { gap: 9px; font-size: 9px; }
+  #panel-api .endpoint > span { font-size: 8px; }
+  .api-limit-list { gap: 6px; padding: 0 17px 17px; }
+  .api-limit-list .badge { font-size: 8px; }
+}
