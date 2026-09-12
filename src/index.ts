@@ -1,19 +1,36 @@
-import { Hono, type Context } from 'hono';
-import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { bodyLimit } from 'hono/body-limit';
-import { AppError, LEVELS, type Env, type LoginAuditOutcome, type NotificationInput, type SourceContext, type Tenant, type TenantCreate, type TenantUpdate, type Application, type ApplicationCreate, type ApplicationUpdate, hubName } from './types';
-import { checkAccess, createSession, equalSecret, sourceContext, verifySession } from './security';
-import { idempotencyKey, notificationInput, object, pageNumber, settingsInput } from './validation';
-import { alertmanagerInputs, grafanaInput } from './integrations';
-import { loginAuditQuery } from './login-audit';
-export { TenantRegistry } from './tenants';
-export { NotificationHub } from './hub';
+import {type Context, Hono} from 'hono';
+import {deleteCookie, getCookie, setCookie} from 'hono/cookie';
+import {bodyLimit} from 'hono/body-limit';
+import {
+  AppError,
+  type Application,
+  type ApplicationCreate,
+  type ApplicationUpdate,
+  type Env,
+  hubName,
+  LEVELS,
+  type LoginAuditOutcome,
+  type NotificationInput,
+  type SourceContext,
+  type Tenant,
+  type TenantCreate,
+  type TenantUpdate
+} from './types';
+import {checkAccess, createSession, equalSecret, sourceContext, verifySession} from './security';
+import {idempotencyKey, notificationInput, object, pageNumber, settingsInput} from './validation';
+import {alertmanagerInputs, grafanaInput} from './integrations';
+import {loginAuditQuery} from './login-audit';
+import {contentSecurityPolicy, dashboardAsset} from './browser-security';
+
+export {TenantRegistry} from './tenants';
+export {NotificationHub} from './hub';
 
 type AppEnv = { Bindings: Env; Variables: { tenant: Tenant; application: Application } };
 type C = Context<AppEnv>;
 const app = new Hono<AppEnv>();
 const registry = (c: C) => c.env.TENANTS.getByName('registry');
 const hub = (c: C) => c.env.HUB.getByName(hubName(c.get('tenant')?.id ?? 'default'));
+
 async function selectTenant(c: C) {
   const id = c.req.param('tenantId') ?? 'default';
   const tenant = await registry(c).getTenant(id);
@@ -21,26 +38,41 @@ async function selectTenant(c: C) {
   c.set('tenant', tenant);
   return tenant;
 }
+
 async function initializeHub(c: C) {
   const tenant = c.get('tenant');
   await hub(c).initializeTenant(tenant.id, tenant.name);
 }
+
 const keyOf = (c: C) => c.req.header('Authorization')?.replace(/^Bearer\s+/i, '') || c.req.header('X-API-Key') || '';
 const cookieName = (c: C) => new URL(c.req.url).protocol === 'https:' ? '__Host-relay_session' : 'relay_session';
-const failure = (c: C, status: number, code: string, message: string) => c.json({ error: { code, message } }, status as 400);
+const failure = (c: C, status: number, code: string, message: string) => c.json({
+  error: {
+    code,
+    message
+  }
+}, status as 400);
 const requireConfig = (c: C) => {
   if (!c.env.API_KEY) throw new AppError(503, 'AUTH_UNAVAILABLE', 'امکان ورود وجود ندارد؛ کمی بعد دوباره تلاش کنید.');
 };
+
 async function jsonBody(c: C) {
   if (c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') throw new AppError(415, 'JSON_REQUIRED', 'Content-Type باید application/json باشد.');
-  try { return await c.req.json<unknown>(); } catch { throw new AppError(400, 'INVALID_JSON', 'JSON معتبر نیست.'); }
+  try {
+    return await c.req.json<unknown>();
+  } catch {
+    throw new AppError(400, 'INVALID_JSON', 'JSON معتبر نیست.');
+  }
 }
+
 function requireOrigin(c: C) {
   if (c.req.header('Origin') !== new URL(c.req.url).origin) throw new AppError(403, 'ORIGIN_REJECTED', 'مبدأ درخواست معتبر نیست.');
 }
+
 async function isAdmin(c: C) {
   return verifySession(getCookie(c, cookieName(c)), c.env.API_KEY);
 }
+
 async function auditLogin(c: C, outcome: LoginAuditOutcome): Promise<void> {
   const source = sourceContext(c.req.raw);
   try {
@@ -54,17 +86,19 @@ async function auditLogin(c: C, outcome: LoginAuditOutcome): Promise<void> {
     console.warn('Login audit write failed.');
   }
 }
+
 async function fingerprint(input: NotificationInput, suppliedTimestamp: boolean) {
   const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
-  const data = { ...input } as Partial<NotificationInput>;
+  const data = {...input} as Partial<NotificationInput>;
   if (!suppliedTimestamp) delete data.timestamp;
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(canonical(data))));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
+
 async function accept(c: C, input: NotificationInput, source: SourceContext, key?: string, suppliedTimestamp = true) {
   // Adapter payloads must satisfy the final length limit after the key binds the application name.
-  const { applicationId, ...fields } = input;
-  input = { ...notificationInput(fields, source), applicationId };
+  const {applicationId, ...fields} = input;
+  input = {...notificationInput(fields, source), applicationId};
   const scopedKey = key ? `${input.applicationId ?? 'legacy'}:${key}` : undefined;
   return hub(c).enqueue(input, source, scopedKey, await fingerprint(input, suppliedTimestamp));
 }
@@ -73,27 +107,41 @@ app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'no-referrer');
   c.header('X-Frame-Options', 'DENY');
-  c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   if (new URL(c.req.url).protocol === 'https:') c.header('Strict-Transport-Security', 'max-age=31536000');
   if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/telegram/')) c.header('Cache-Control', 'no-store');
   await next();
+  if (!c.res.headers.has('Content-Security-Policy')) c.header('Content-Security-Policy', contentSecurityPolicy());
 });
-app.use('*', bodyLimit({ maxSize: 64 * 1024, onError: c => failure(c, 413, 'BODY_TOO_LARGE', 'حداکثر اندازه درخواست ۶۴ کیلوبایت است.') }));
-app.get('/health', c => c.json({ status: 'ok', service: 'telegram-relay' }));
+app.use('*', bodyLimit({
+  maxSize: 64 * 1024,
+  onError: c => failure(c, 413, 'BODY_TOO_LARGE', 'حداکثر اندازه درخواست ۶۴ کیلوبایت است.')
+}));
+app.get('/health', c => c.json({status: 'ok', service: 'telegram-relay'}));
 app.post('/api/admin/login', async c => {
   requireConfig(c);
   requireOrigin(c);
   if (!await hub(c).rateLimit(`login:${sourceContext(c.req.raw).ip}`, 10, 60)) {
     await auditLogin(c, 'rate_limited');
-    c.header('Retry-After', '60'); return failure(c, 429, 'RATE_LIMITED', 'تلاش‌های ورود زیاد است؛ یک دقیقه صبر کنید.');
+    c.header('Retry-After', '60');
+    return failure(c, 429, 'RATE_LIMITED', 'تلاش‌های ورود زیاد است؛ یک دقیقه صبر کنید.');
   }
   const data = object(await jsonBody(c));
   if (typeof data.apiKey !== 'string' || !await equalSecret(data.apiKey, c.env.API_KEY)) {
     await auditLogin(c, 'invalid_key');
     return failure(c, 401, 'INVALID_KEY', 'اطلاعات ورود معتبر نیست.');
   }
-  setCookie(c, cookieName(c), await createSession(c.env.API_KEY), { httpOnly: true, secure: new URL(c.req.url).protocol === 'https:', sameSite: 'Strict', path: '/', maxAge: 8 * 3600 });
-  return c.json({ authenticated: true });
+  setCookie(c, cookieName(c), await createSession(c.env.API_KEY), {
+    httpOnly: true,
+    secure: new URL(c.req.url).protocol === 'https:',
+    sameSite: 'Strict',
+    path: '/',
+    maxAge: 8 * 3600
+  });
+  return c.json({authenticated: true});
+});
+app.get('/api/admin/session', async c => {
+  requireConfig(c);
+  return c.json({authenticated: await isAdmin(c)});
 });
 app.use('/api/admin/*', async (c, next) => {
   requireConfig(c);
@@ -101,28 +149,39 @@ app.use('/api/admin/*', async (c, next) => {
   if (!['GET', 'HEAD'].includes(c.req.method)) requireOrigin(c);
   await next();
 });
-app.get('/api/admin/session', c => c.json({ authenticated: true }));
 app.get('/api/admin/login-audit', async c => c.json(await registry(c).listLoginAudit(loginAuditQuery(c.req.query()))));
-app.post('/api/admin/logout', c => { deleteCookie(c, cookieName(c), { path: '/', secure: new URL(c.req.url).protocol === 'https:', httpOnly: true, sameSite: 'Strict' }); return c.json({ authenticated: false }); });
+app.post('/api/admin/logout', c => {
+  deleteCookie(c, cookieName(c), {
+    path: '/',
+    secure: new URL(c.req.url).protocol === 'https:',
+    httpOnly: true,
+    sameSite: 'Strict'
+  });
+  return c.json({authenticated: false});
+});
 // Management endpoints return public tenant metadata only. Runtime credentials stay in RPC.
-app.get('/api/admin/tenants', async c => c.json({ tenants: await registry(c).listTenants() }));
+app.get('/api/admin/tenants', async c => c.json({tenants: await registry(c).listTenants()}));
 app.post('/api/admin/tenants', async c => {
   const result = await registry(c).createTenant(object(await jsonBody(c)) as unknown as TenantCreate);
-  return c.json({ tenant: result.tenant }, 201);
+  return c.json({tenant: result.tenant}, 201);
 });
-app.get('/api/admin/tenants/:tenantId', async c => c.json({ tenant: await selectTenant(c) }));
-app.patch('/api/admin/tenants/:tenantId', async c => c.json({ tenant: await registry(c).updateTenant(c.req.param('tenantId'), object(await jsonBody(c)) as TenantUpdate) }));
+app.get('/api/admin/tenants/:tenantId', async c => c.json({tenant: await selectTenant(c)}));
+app.patch('/api/admin/tenants/:tenantId', async c => c.json({tenant: await registry(c).updateTenant(c.req.param('tenantId'), object(await jsonBody(c)) as TenantUpdate)}));
 app.put('/api/admin/tenants/:tenantId/bot', async c => {
   const data = object(await jsonBody(c));
   if (typeof data.botToken !== 'string' || data.botToken.length > 256) throw new AppError(400, 'INVALID_BOT_TOKEN', 'BOT_TOKEN معتبر را وارد کنید.');
   if (data.expectedVersion !== undefined && (!Number.isSafeInteger(data.expectedVersion) || Number(data.expectedVersion) < 1)) throw new AppError(400, 'INVALID_TENANT', 'نسخه Tenant معتبر نیست.');
-  return c.json({ tenant: await registry(c).configureBot(c.req.param('tenantId'), data.botToken, data.expectedVersion as number | undefined) });
+  return c.json({tenant: await registry(c).configureBot(c.req.param('tenantId'), data.botToken, data.expectedVersion as number | undefined)});
 });
 const adminData = new Hono<AppEnv>();
-adminData.use('*', async (c, next) => { await selectTenant(c); await initializeHub(c); await next(); });
-adminData.get('/applications', async c => c.json({ applications: await registry(c).listApplications(c.get('tenant').id) }));
+adminData.use('*', async (c, next) => {
+  await selectTenant(c);
+  await initializeHub(c);
+  await next();
+});
+adminData.get('/applications', async c => c.json({applications: await registry(c).listApplications(c.get('tenant').id)}));
 adminData.post('/applications', async c => c.json(await registry(c).createApplication(c.get('tenant').id, object(await jsonBody(c)) as unknown as ApplicationCreate), 201));
-adminData.patch('/applications/:applicationId', async c => c.json({ application: await registry(c).updateApplication(c.get('tenant').id, c.req.param('applicationId'), object(await jsonBody(c)) as ApplicationUpdate) }));
+adminData.patch('/applications/:applicationId', async c => c.json({application: await registry(c).updateApplication(c.get('tenant').id, c.req.param('applicationId'), object(await jsonBody(c)) as ApplicationUpdate)}));
 adminData.post('/applications/:applicationId/rotate-key', async c => {
   const data = object(await jsonBody(c));
   if (data.expectedVersion !== undefined && (!Number.isSafeInteger(data.expectedVersion) || Number(data.expectedVersion) < 1)) throw new AppError(400, 'INVALID_APPLICATION', 'نسخه اپلیکیشن معتبر نیست.');
@@ -154,12 +213,15 @@ adminData.post('/notifications', async c => {
   if (typeof raw.applicationId !== 'string') throw new AppError(400, 'APPLICATION_REQUIRED', 'اپلیکیشن فرستنده را انتخاب کنید.');
   const application = await registry(c).getApplication(c.get('tenant').id, raw.applicationId);
   if (!application || !application.enabled) throw new AppError(400, 'APPLICATION_DISABLED', 'اپلیکیشن فرستنده موجود یا فعال نیست.');
-  const { applicationId: selectedApplicationId, ...fields } = raw;
-  const input = { ...notificationInput({ ...fields, application: application.name }, source), applicationId: application.id };
+  const {applicationId: selectedApplicationId, ...fields} = raw;
+  const input = {
+    ...notificationInput({...fields, application: application.name}, source),
+    applicationId: application.id
+  };
   return c.json(await accept(c, input, source, idempotencyKey(c.req.header('Idempotency-Key')), raw.timestamp !== undefined), 202);
 });
 adminData.get('/status', async c => c.json(await registry(c).getBotStatus(c.get('tenant').id)));
-adminData.get('/usage', async c => c.json({ usage: await hub(c).getUsage(), limits: c.get('tenant').limits }));
+adminData.get('/usage', async c => c.json({usage: await hub(c).getUsage(), limits: c.get('tenant').limits}));
 adminData.post('/webhook', async c => {
   if (!await hub(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
   const origin = new URL(c.req.url).origin;
@@ -183,18 +245,24 @@ ingest.use('*', async (c, next) => {
   await initializeHub(c);
   const source = sourceContext(c.req.raw);
   checkAccess(await hub(c).getSettings(), source);
-  if (!await hub(c).rateLimit('ingest:tenant', tenant.limits.requestsPerMinute, 60)) { c.header('Retry-After', '60'); return failure(c, 429, 'RATE_LIMITED', 'سقف درخواست این Tenant در دقیقه پر شده است.'); }
+  if (!await hub(c).rateLimit('ingest:tenant', tenant.limits.requestsPerMinute, 60)) {
+    c.header('Retry-After', '60');
+    return failure(c, 429, 'RATE_LIMITED', 'سقف درخواست این Tenant در دقیقه پر شده است.');
+  }
   await next();
 });
 ingest.post('/notifications', async c => {
   const raw = object(await jsonBody(c)), source = sourceContext(c.req.raw);
   const application = c.get('application');
-  const result = await accept(c, { ...notificationInput({ ...raw, application: application.name }, source), applicationId: application.id }, source, idempotencyKey(c.req.header('Idempotency-Key')), raw.timestamp !== undefined);
+  const result = await accept(c, {
+    ...notificationInput({...raw, application: application.name}, source),
+    applicationId: application.id
+  }, source, idempotencyKey(c.req.header('Idempotency-Key')), raw.timestamp !== undefined);
   return c.json(result, result.duplicate ? 200 : 202);
 });
 ingest.get('/notifications/:id', async c => {
   const result = await hub(c).getNotification(c.req.param('id'));
-  return result && result.notification.applicationId === c.get('application').id ? c.json({ notification: result.notification }) : failure(c, 404, 'NOT_FOUND', 'اعلان پیدا نشد.');
+  return result && result.notification.applicationId === c.get('application').id ? c.json({notification: result.notification}) : failure(c, 404, 'NOT_FOUND', 'اعلان پیدا نشد.');
 });
 ingest.post('/integrations/alertmanager', async c => {
   const raw = object(await jsonBody(c)), source = sourceContext(c.req.raw, 'alertmanager');
@@ -204,14 +272,22 @@ ingest.post('/integrations/alertmanager', async c => {
     const alert = object((raw.alerts as unknown[])[i]);
     const suppliedTimestamp = !!(alert.status === 'resolved' && alert.endsAt ? alert.endsAt : alert.startsAt);
     const application = c.get('application');
-    results.push(await accept(c, { ...input, application: application.name, applicationId: application.id }, source, key ? `${key}:${i}` : undefined, suppliedTimestamp));
+    results.push(await accept(c, {
+      ...input,
+      application: application.name,
+      applicationId: application.id
+    }, source, key ? `${key}:${i}` : undefined, suppliedTimestamp));
   }
-  return c.json({ notifications: results }, 202);
+  return c.json({notifications: results}, 202);
 });
 ingest.post('/integrations/grafana', async c => {
   const source = sourceContext(c.req.raw, 'grafana');
   const application = c.get('application');
-  return c.json(await accept(c, { ...grafanaInput(await jsonBody(c), source), application: application.name, applicationId: application.id }, source, idempotencyKey(c.req.header('Idempotency-Key')), false), 202);
+  return c.json(await accept(c, {
+    ...grafanaInput(await jsonBody(c), source),
+    application: application.name,
+    applicationId: application.id
+  }, source, idempotencyKey(c.req.header('Idempotency-Key')), false), 202);
 });
 app.route('/api/v1/tenants/:tenantId', ingest);
 app.route('/api/v1', ingest);
@@ -223,11 +299,14 @@ async function telegramWebhook(c: C) {
   if (!await equalSecret(c.req.header('X-Telegram-Bot-Api-Secret-Token') || '', runtime.webhookSecret)) return failure(c, 401, 'UNAUTHORIZED', 'وب‌هوک معتبر نیست.');
   await initializeHub(c);
   await hub(c).handleUpdate(await jsonBody(c));
-  return c.json({ ok: true });
+  return c.json({ok: true});
 }
+
 app.post('/telegram/:tenantId/webhook', telegramWebhook);
 app.post('/telegram/webhook', telegramWebhook);
 app.all('/api/*', c => failure(c, 404, 'NOT_FOUND', 'مسیر پیدا نشد.'));
+app.get('/', c => dashboardAsset(c.req.raw, c.env.ASSETS));
+app.get('/index.html', c => dashboardAsset(c.req.raw, c.env.ASSETS));
 app.get('*', c => c.env.ASSETS.fetch(c.req.raw));
 app.notFound(c => failure(c, 404, 'NOT_FOUND', 'مسیر پیدا نشد.'));
 app.onError((error, c) => {
@@ -244,6 +323,11 @@ app.onError((error, c) => {
     BOT_CHANGE_REQUIRES_NEW_TENANT: [409, 'برای بات متفاوت یک Tenant جدید بسازید؛ کاربران هر بات مستقل هستند.'],
     INVALID_BOT_TOKEN: [400, 'تلگرام BOT_TOKEN را تأیید نکرد؛ توکن معتبر بات را وارد کنید.'],
     TELEGRAM_UNAVAILABLE: [502, 'ارتباط با تلگرام برقرار نشد؛ دوباره تلاش کنید.'],
+    TELEGRAM_TIMEOUT: [504, 'تلگرام در مهلت مقرر پاسخ نداد؛ کمی بعد دوباره تلاش کنید.'],
+    TELEGRAM_NETWORK_ERROR: [502, 'اتصال سرویس به تلگرام برقرار نشد؛ دسترسی شبکهٔ محیط اجرای Worker را بررسی کنید.'],
+    TELEGRAM_INVALID_RESPONSE: [502, 'پاسخ دریافتی از تلگرام معتبر نبود؛ کمی بعد دوباره تلاش کنید.'],
+    TELEGRAM_UPSTREAM_ERROR: [502, 'تلگرام موقتاً در دسترس نیست؛ کمی بعد دوباره تلاش کنید.'],
+    TELEGRAM_RATE_LIMITED: [429, 'تلگرام تعداد درخواست‌ها را محدود کرده است؛ کمی صبر کنید و دوباره تلاش کنید.'],
     BOT_NOT_CONFIGURED: [503, 'ابتدا BOT_TOKEN را در تنظیمات این Tenant ذخیره کنید.'],
     APPLICATION_NOT_FOUND: [404, 'اپلیکیشن پیدا نشد.'],
     APPLICATION_EXISTS: [409, 'این شناسه اپلیکیشن قبلاً ثبت شده است.'],

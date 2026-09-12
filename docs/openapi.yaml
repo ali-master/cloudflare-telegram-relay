@@ -420,30 +420,22 @@ paths:
       summary: "Check whether the admin session remains valid"
       tags:
         ["Administration"]
-      security:
-        -
-          adminSession:
-            []
-        -
-          localAdminSession:
-            []
+      security: []
       responses:
         "200":
-          description: "Success."
+          description: "Session status. Missing, invalid, or expired cookies return authenticated=false without an HTTP authentication error."
           content:
             "application/json":
               schema:
                 type: "object"
                 properties:
                   authenticated:
-                    const: true
+                    type: boolean
                 required:
                   ["authenticated"]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
-        "401":
-          "$ref": "#/components/responses/Unauthorized"
         "403":
           "$ref": "#/components/responses/Forbidden"
         "413":
@@ -3037,17 +3029,27 @@ paths:
         "415":
           "$ref": "#/components/responses/UnsupportedMediaType"
         "429":
-          "$ref": "#/components/responses/RateLimited"
+          description: "TELEGRAM_RATE_LIMITED: Telegram temporarily limited bot validation requests."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
         "500":
           "$ref": "#/components/responses/InternalError"
         "502":
-          description: "Telegram could not validate token."
+          description: "Telegram validation failed: TELEGRAM_NETWORK_ERROR, TELEGRAM_INVALID_RESPONSE, TELEGRAM_UPSTREAM_ERROR, or TELEGRAM_UNAVAILABLE. No raw upstream details or credentials are returned."
           content:
             "application/json":
               schema:
                 "$ref": "#/components/schemas/Error"
         "503":
           "$ref": "#/components/responses/NotConfigured"
+        "504":
+          description: "TELEGRAM_TIMEOUT: Telegram did not finish responding before the request deadline."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
       description: "Validates with getMe and rechecks version/ownership after network completion. Never returns token. Bot identity cannot switch after assignment; same-bot token rotation preserves secret."
       parameters:
         -
