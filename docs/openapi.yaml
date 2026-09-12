@@ -1,0 +1,4275 @@
+# OpenAPI 3.1 contract for the implemented relay endpoints.
+openapi: "3.1.0"
+info:
+  title: "Telegram Relay API"
+  version: "1.0.0"
+  description: "Multi-tenant Telegram notification gateway. Each tenant has an isolated bot, audience, queue, access policy, quotas, and applications. Producers use an APPLICATION API key in Authorization: Bearer or X-API-Key. The master API_KEY is for admin login only. The header key binds application identity and display name. Explicit routes use /api/v1/tenants/{tenantId}; /api/v1 is the default-tenant alias. Producers share the tenant minute quota across applications/IPs. Admin login creates an 8-hour HttpOnly session; admin mutations require an exact Origin header. All JSON bodies are capped at 64 KiB. Acceptance is not proof of Telegram delivery."
+servers:
+  -
+    url: "/"
+    description: "The current deployed relay origin."
+tags:
+  -
+    name: "Producer API"
+    description: "Application-authenticated tenant ingestion and own-application status."
+  -
+    name: "Administration"
+    description: "Master-key session, tenants, bots, applications, policies, bans, quotas, and reports."
+  -
+    name: "Telegram"
+    description: "Telegram-owned subscription callback."
+  -
+    name: "Health"
+    description: "Basic runtime routing health."
+paths:
+  "/health":
+    get:
+      operationId: "health"
+      summary: "Worker routing health (does not contact Telegram)"
+      tags:
+        ["Health"]
+      security:
+        []
+      responses:
+        "200":
+          description: "Worker handler is responding."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  status:
+                    const: "ok"
+                  service:
+                    const: "telegram-relay"
+                required:
+                  ["status","service"]
+                additionalProperties: false
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+  "/api/v1/notifications":
+    post:
+      operationId: "createNotification"
+      summary: "Broadcast to the current active subscriber snapshot"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "200":
+          description: "Existing idempotent request; no new broadcast was created."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "202":
+          description: "Persisted for delivery; this does not prove Telegram delivery."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/NotificationInput"
+      description: "This is the default-tenant compatibility route. Authentication requires a default-tenant application key; master admin keys are rejected."
+  "/api/v1/notifications/{id}":
+    get:
+      operationId: "getNotification"
+      summary: "Read a retained notification and aggregate delivery counts"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "200":
+          description: "Notification with current aggregate status; recipient identities are not included."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/NotificationDetail"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Notification not found or already removed by retention cleanup."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "id"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            format: "uuid"
+      description: "This is the default-tenant compatibility route. Authentication requires a default-tenant application key; master admin keys are rejected. The application can read only its own notification IDs; other IDs return 404."
+  "/api/v1/integrations/alertmanager":
+    post:
+      operationId: "ingestAlertmanager"
+      summary: "Expand a native Alertmanager webhook into 1–20 notifications"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "202":
+          description: "Accepted records; duplicates are indicated per record."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/BatchAcceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Maps each alert separately and truncates selected text fields. Resolved alerts use success severity. Batch enqueue is sequential, not atomic: a later error can occur after earlier records were accepted. A retry without Idempotency-Key can create duplicates. When using a key, preserve the alerts array order and payload. Alertmanager's native receiver does not supply a unique event key by default. This is the default-tenant compatibility route. Authentication requires a default-tenant application key; master admin keys are rejected."
+      parameters:
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/AlertmanagerWebhook"
+  "/api/v1/integrations/grafana":
+    post:
+      operationId: "ingestGrafana"
+      summary: "Normalize one native Grafana alert-group notification"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "202":
+          description: "Group notification accepted or found by idempotency key."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Uses title, message, status, commonLabels, and externalURL; individual alert details are not expanded. Selected strings are truncated to normalized limits. API-key authentication is required; Grafana HMAC signatures are not verified. This is the default-tenant compatibility route. Authentication requires a default-tenant application key; master admin keys are rejected."
+      parameters:
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/GrafanaWebhook"
+  "/api/admin/login":
+    post:
+      operationId: "adminLogin"
+      summary: "Exchange the environment API_KEY for an 8-hour admin session"
+      tags:
+        ["Administration"]
+      security:
+        []
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                apiKey:
+                  type: "string"
+                  maxLength: 1024
+                  minLength: 1
+              required:
+                ["apiKey"]
+              additionalProperties: false
+      responses:
+        "200":
+          description: "Authenticated; store the HttpOnly SameSite=Strict session cookie."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  authenticated:
+                    const: true
+                required:
+                  ["authenticated"]
+                additionalProperties: false
+          headers:
+            Set-Cookie:
+              description: "__Host-relay_session on HTTPS (Secure; Path=/; HttpOnly; SameSite=Strict), relay_session on local HTTP."
+              schema:
+                type: "string"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+  "/api/admin/login-audit":
+    get:
+      operationId: "listLoginAudit"
+      summary: "Read failed dashboard login attempts across the deployment"
+      description: "Retains at most the latest 5000 attempts for 30 days. invalid_key means an incorrect or missing submitted key; rate_limited means the request was rejected before checking its key. Successful logins, malformed JSON, rejected origins, and unavailable authentication are not recorded. IP and country use trusted Cloudflare metadata; userAgent is bounded, self-reported text. Credentials, bodies, and cookies are excluded. Results are ordered newest first and offset pages can shift as new attempts arrive."
+      tags: ["Administration"]
+      security:
+        - adminSession: []
+        - localAdminSession: []
+      parameters:
+        - name: "limit"
+          in: "query"
+          schema: { type: "integer", minimum: 1, maximum: 100, default: 25 }
+        - name: "offset"
+          in: "query"
+          schema: { type: "integer", minimum: 0, maximum: 5000, default: 0 }
+        - name: "ip"
+          in: "query"
+          description: "Exact recorded IP match."
+          schema: { type: "string", maxLength: 64 }
+        - name: "country"
+          in: "query"
+          description: "Two-letter country code, normalized to uppercase. XX means unknown."
+          schema: { type: "string", pattern: "^[A-Za-z]{2}$" }
+        - name: "outcome"
+          in: "query"
+          schema: { type: "string", enum: ["invalid_key", "rate_limited"] }
+      responses:
+        "200":
+          description: "Retained matching entries and pagination metadata."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                required: ["entries", "total", "limit", "offset"]
+                additionalProperties: false
+                properties:
+                  total: { type: "integer", minimum: 0, maximum: 5000 }
+                  limit: { type: "integer", minimum: 1, maximum: 100 }
+                  offset: { type: "integer", minimum: 0, maximum: 5000 }
+                  entries:
+                    type: "array"
+                    maxItems: 100
+                    items:
+                      type: "object"
+                      required: ["id", "createdAt", "ip", "country", "userAgent", "requestId", "outcome"]
+                      additionalProperties: false
+                      properties:
+                        id: { type: "string", pattern: "^[0-9]+$" }
+                        createdAt: { type: "string", format: "date-time" }
+                        ip: { type: "string", maxLength: 64 }
+                        country: { type: "string", pattern: "^[A-Z]{2}$" }
+                        userAgent: { type: "string", maxLength: 512 }
+                        requestId: { type: ["string", "null"], maxLength: 36 }
+                        outcome: { type: "string", enum: ["invalid_key", "rate_limited"] }
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          description: "Authentication is temporarily unavailable; returns generic AUTH_UNAVAILABLE details."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+  "/api/admin/session":
+    get:
+      operationId: "adminSession"
+      summary: "Check whether the admin session remains valid"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  authenticated:
+                    const: true
+                required:
+                  ["authenticated"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+  "/api/admin/logout":
+    post:
+      operationId: "adminLogout"
+      summary: "Clear the browser's session cookie"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  authenticated:
+                    const: false
+                required:
+                  ["authenticated"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+  "/api/admin/context":
+    get:
+      operationId: "adminContext"
+      summary: "Read the current request's source IP and country"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SourceContext"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+  "/api/admin/overview":
+    get:
+      operationId: "adminOverview"
+      summary: "Read retained totals, seven daily UTC buckets, and recent notifications"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Overview"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Counts derive from retained database records. Sent means Telegram accepted delivery, not that a subscriber read it. Welcome messages are excluded from notification delivery reports."
+  "/api/admin/settings":
+    get:
+      operationId: "getSettings"
+      summary: "Read current settings"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Settings"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+    put:
+      operationId: "updateSettings"
+      summary: "Merge and validate settings"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Settings"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/SettingsUpdate"
+  "/api/admin/subscribers":
+    get:
+      operationId: "listSubscribers"
+      summary: "List private-chat subscribers"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubscriberPage"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "page"
+          in: "query"
+          schema:
+            type: "integer"
+            minimum: 1
+            maximum: 999999
+            default: 1
+          description: "One-based page; page size is fixed at 20."
+  "/api/admin/notifications":
+    get:
+      operationId: "listNotifications"
+      summary: "List retained notifications"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/NotificationPage"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "page"
+          in: "query"
+          schema:
+            type: "integer"
+            minimum: 1
+            maximum: 999999
+            default: 1
+          description: "One-based page; page size is fixed at 20."
+        -
+          name: "level"
+          in: "query"
+          schema:
+            type: "string"
+            enum:
+              ["info","success","warning","error","critical"]
+        -
+          name: "search"
+          in: "query"
+          schema:
+            type: "string"
+            maxLength: 100
+          description: "Search application, event, or message text."
+        -
+          name: "applicationId"
+          in: "query"
+          schema:
+            type: "string"
+            maxLength: 48
+          description: "Filter by stored application identity."
+    post:
+      operationId: "adminCreateNotification"
+      summary: "Broadcast from the authenticated dashboard"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "202":
+          description: "Accepted record or idempotent duplicate."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/AdminNotificationInput"
+  "/api/admin/notifications/{id}":
+    get:
+      operationId: "adminGetNotification"
+      summary: "Read notification and up to 100 recipient delivery details"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Notification and delivery records."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/AdminNotificationDetail"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Notification not found or already removed by retention cleanup."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "id"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            format: "uuid"
+  "/api/admin/status":
+    get:
+      operationId: "adminStatus"
+      summary: "Read cached bot/webhook status for the default tenant"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/AdminStatus"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+  "/api/admin/webhook":
+    post:
+      operationId: "registerTelegramWebhook"
+      summary: "Register this HTTPS deployment as the bot's webhook"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  ok:
+                    const: true
+                  url:
+                    type: "string"
+                    format: "uri"
+                required:
+                  ["ok","url"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "502":
+          description: "Telegram did not confirm registration."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Registers /telegram/webhook for the enabled default tenant, preserving pending updates. Uses message, my_chat_member, and callback_query. No body required."
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+  "/telegram/webhook":
+    post:
+      operationId: "telegramWebhook"
+      summary: "Receive Telegram subscription updates"
+      tags:
+        ["Telegram"]
+      security:
+        -
+          telegramWebhookSecret:
+            []
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/TelegramUpdate"
+      responses:
+        "200":
+          description: "Update processed or safely ignored."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  ok:
+                    const: true
+                required:
+                  ["ok"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+  "/api/admin/applications":
+    get:
+      operationId: "listApplications"
+      summary: "List default tenant applications"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  applications:
+                    type: "array"
+                    items:
+                      "$ref": "#/components/schemas/Application"
+                required:
+                  ["applications"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+    post:
+      operationId: "createApplication"
+      summary: "Create application and reveal its generated key once"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "201":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/ApplicationKeyResult"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/ApplicationCreate"
+  "/api/admin/applications/{applicationId}":
+    patch:
+      operationId: "updateApplication"
+      summary: "Rename, enable, or disable application"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  application:
+                    "$ref": "#/components/schemas/Application"
+                required:
+                  ["application"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "applicationId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/ApplicationUpdate"
+  "/api/admin/applications/{applicationId}/rotate-key":
+    post:
+      operationId: "rotateApplicationKey"
+      summary: "Replace application key and reveal it once"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/ApplicationKeyResult"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "applicationId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                expectedVersion:
+                  type: "integer"
+                  minimum: 1
+                  description: "Version last observed by the client; stale writes return 409."
+              required:
+                []
+              additionalProperties: false
+  "/api/admin/subscribers/ban":
+    post:
+      operationId: "banSubscribers"
+      summary: "Ban or unban up to 100 default-tenant subscribers"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  updated:
+                    type: "integer"
+                    minimum: 0
+                required:
+                  ["updated"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Bans prevent /start and skip pending jobs. Unbanning preserves inactive state; /start is required again. Unknown chat IDs are ignored."
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/BanInput"
+  "/api/admin/usage":
+    get:
+      operationId: "getTenantUsage"
+      summary: "Read default-tenant usage and quotas"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  usage:
+                    "$ref": "#/components/schemas/TenantUsage"
+                  limits:
+                    "$ref": "#/components/schemas/TenantLimits"
+                required:
+                  ["usage","limits"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+  "/api/admin/tenants/{tenantId}/applications":
+    get:
+      operationId: "listApplicationsForTenant"
+      summary: "List selected tenant applications"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  applications:
+                    type: "array"
+                    items:
+                      "$ref": "#/components/schemas/Application"
+                required:
+                  ["applications"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+    post:
+      operationId: "createApplicationForTenant"
+      summary: "Create application and reveal its generated key once"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "201":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/ApplicationKeyResult"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/ApplicationCreate"
+  "/api/admin/tenants/{tenantId}/applications/{applicationId}":
+    patch:
+      operationId: "updateApplicationForTenant"
+      summary: "Rename, enable, or disable application"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  application:
+                    "$ref": "#/components/schemas/Application"
+                required:
+                  ["application"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "applicationId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/ApplicationUpdate"
+  "/api/admin/tenants/{tenantId}/applications/{applicationId}/rotate-key":
+    post:
+      operationId: "rotateApplicationKeyForTenant"
+      summary: "Replace application key and reveal it once"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/ApplicationKeyResult"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "applicationId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                expectedVersion:
+                  type: "integer"
+                  minimum: 1
+                  description: "Version last observed by the client; stale writes return 409."
+              required:
+                []
+              additionalProperties: false
+  "/api/admin/tenants/{tenantId}/subscribers/ban":
+    post:
+      operationId: "banSubscribersForTenant"
+      summary: "Ban or unban up to 100 selected-tenant subscribers"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  updated:
+                    type: "integer"
+                    minimum: 0
+                required:
+                  ["updated"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Bans prevent /start and skip pending jobs. Unbanning preserves inactive state; /start is required again. Unknown chat IDs are ignored."
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/BanInput"
+  "/api/admin/tenants/{tenantId}/usage":
+    get:
+      operationId: "getTenantUsageForTenant"
+      summary: "Read selected-tenant usage and quotas"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  usage:
+                    "$ref": "#/components/schemas/TenantUsage"
+                  limits:
+                    "$ref": "#/components/schemas/TenantLimits"
+                required:
+                  ["usage","limits"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+  "/api/admin/tenants/{tenantId}/context":
+    get:
+      operationId: "adminContextForTenant"
+      summary: "Read the current request's source IP and country"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SourceContext"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+  "/api/admin/tenants/{tenantId}/overview":
+    get:
+      operationId: "adminOverviewForTenant"
+      summary: "Read retained totals, seven daily UTC buckets, and recent notifications"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Overview"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Counts derive from retained database records. Sent means Telegram accepted delivery, not that a subscriber read it. Welcome messages are excluded from notification delivery reports."
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+  "/api/admin/tenants/{tenantId}/settings":
+    get:
+      operationId: "getSettingsForTenant"
+      summary: "Read current settings"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Settings"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+    put:
+      operationId: "updateSettingsForTenant"
+      summary: "Merge and validate settings"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Settings"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/SettingsUpdate"
+  "/api/admin/tenants/{tenantId}/subscribers":
+    get:
+      operationId: "listSubscribersForTenant"
+      summary: "List private-chat subscribers"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubscriberPage"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "page"
+          in: "query"
+          schema:
+            type: "integer"
+            minimum: 1
+            maximum: 999999
+            default: 1
+          description: "One-based page; page size is fixed at 20."
+  "/api/admin/tenants/{tenantId}/notifications":
+    get:
+      operationId: "listNotificationsForTenant"
+      summary: "List retained notifications"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/NotificationPage"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "page"
+          in: "query"
+          schema:
+            type: "integer"
+            minimum: 1
+            maximum: 999999
+            default: 1
+          description: "One-based page; page size is fixed at 20."
+        -
+          name: "level"
+          in: "query"
+          schema:
+            type: "string"
+            enum:
+              ["info","success","warning","error","critical"]
+        -
+          name: "search"
+          in: "query"
+          schema:
+            type: "string"
+            maxLength: 100
+          description: "Search application, event, or message text."
+        -
+          name: "applicationId"
+          in: "query"
+          schema:
+            type: "string"
+            maxLength: 48
+          description: "Filter by stored application identity."
+    post:
+      operationId: "adminCreateNotificationForTenant"
+      summary: "Broadcast from the authenticated dashboard"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "202":
+          description: "Accepted record or idempotent duplicate."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/AdminNotificationInput"
+  "/api/admin/tenants/{tenantId}/notifications/{id}":
+    get:
+      operationId: "adminGetNotificationForTenant"
+      summary: "Read notification and up to 100 recipient delivery details"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Notification and delivery records."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/AdminNotificationDetail"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Notification not found or already removed by retention cleanup."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "id"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            format: "uuid"
+  "/api/admin/tenants/{tenantId}/status":
+    get:
+      operationId: "adminStatusForTenant"
+      summary: "Read cached bot/webhook status for the selected tenant"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/AdminStatus"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+  "/api/admin/tenants/{tenantId}/webhook":
+    post:
+      operationId: "registerTelegramWebhookForTenant"
+      summary: "Register this HTTPS deployment as the bot's webhook"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  ok:
+                    const: true
+                  url:
+                    type: "string"
+                    format: "uri"
+                required:
+                  ["ok","url"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "502":
+          description: "Telegram did not confirm registration."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Registers /telegram/{tenantId}/webhook at this HTTPS origin for the enabled tenant. Uses private token/secret and message, my_chat_member, callback_query update types. No body required; pending Telegram updates preserved."
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port. Required for admin mutations and login."
+          schema:
+            type: "string"
+            format: "uri"
+            example: "https://relay.example.com"
+  "/api/v1/tenants/{tenantId}/notifications":
+    post:
+      operationId: "createNotificationForTenant"
+      summary: "Broadcast to the current active subscriber snapshot"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "200":
+          description: "Existing idempotent request; no new broadcast was created."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "202":
+          description: "Persisted for delivery; this does not prove Telegram delivery."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/NotificationInput"
+      description: "Requires an application key belonging to the selected tenant. Master admin keys are rejected."
+  "/api/v1/tenants/{tenantId}/notifications/{id}":
+    get:
+      operationId: "getNotificationForTenant"
+      summary: "Read a retained notification and aggregate delivery counts"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "200":
+          description: "Notification with current aggregate status; recipient identities are not included."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/NotificationDetail"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Notification not found or already removed by retention cleanup."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "id"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            format: "uuid"
+      description: "Requires an application key belonging to the selected tenant. Master admin keys are rejected. The application can read only its own notification IDs; other IDs return 404."
+  "/api/v1/tenants/{tenantId}/integrations/alertmanager":
+    post:
+      operationId: "ingestAlertmanagerForTenant"
+      summary: "Expand a native Alertmanager webhook into 1–20 notifications"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "202":
+          description: "Accepted records; duplicates are indicated per record."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/BatchAcceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Maps each alert separately and truncates selected text fields. Resolved alerts use success severity. Batch enqueue is sequential, not atomic: a later error can occur after earlier records were accepted. A retry without Idempotency-Key can create duplicates. When using a key, preserve the alerts array order and payload. Alertmanager's native receiver does not supply a unique event key by default. Requires an application key belonging to the selected tenant. Master admin keys are rejected."
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/AlertmanagerWebhook"
+  "/api/v1/tenants/{tenantId}/integrations/grafana":
+    post:
+      operationId: "ingestGrafanaForTenant"
+      summary: "Normalize one native Grafana alert-group notification"
+      tags:
+        ["Producer API"]
+      security:
+        -
+          bearerAuth:
+            []
+        -
+          apiKeyHeader:
+            []
+      responses:
+        "202":
+          description: "Group notification accepted or found by idempotency key."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Acceptance"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "409":
+          description: "Idempotency-Key already belongs to a different normalized notification."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Uses title, message, status, commonLabels, and externalURL; individual alert details are not expanded. Selected strings are truncated to normalized limits. API-key authentication is required; Grafana HMAC signatures are not verified. Requires an application key belonging to the selected tenant. Master admin keys are rejected."
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Idempotency-Key"
+          in: "header"
+          required: false
+          description: "Key scoped to the authenticated application in this tenant. Identical normalized retries reuse a record; changed content returns 409. Omitted timestamps stay stable. Keys become reusable when retention cleanup selects the terminal record. Alertmanager appends array index, so preserve order."
+          schema:
+            type: "string"
+            pattern: "^[A-Za-z0-9_.:-]{1,128}$"
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/GrafanaWebhook"
+  "/api/admin/tenants":
+    get:
+      operationId: "listTenants"
+      summary: "List public metadata for all tenants"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  tenants:
+                    type: "array"
+                    items:
+                      "$ref": "#/components/schemas/Tenant"
+                required:
+                  ["tenants"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+    post:
+      operationId: "createTenant"
+      summary: "Create isolated tenant (up to 500 per deployment)"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "201":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  tenant:
+                    "$ref": "#/components/schemas/Tenant"
+                required:
+                  ["tenant"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/TenantCreate"
+  "/api/admin/tenants/{tenantId}":
+    get:
+      operationId: "getTenant"
+      summary: "Read public tenant metadata"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  tenant:
+                    "$ref": "#/components/schemas/Tenant"
+                required:
+                  ["tenant"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+    patch:
+      operationId: "updateTenant"
+      summary: "Update tenant name, enabled state, or quotas"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  tenant:
+                    "$ref": "#/components/schemas/Tenant"
+                required:
+                  ["tenant"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/TenantUpdate"
+  "/api/admin/tenants/{tenantId}/bot":
+    put:
+      operationId: "configureTenantBot"
+      summary: "Verify and privately store tenant bot token"
+      tags:
+        ["Administration"]
+      security:
+        -
+          adminSession:
+            []
+        -
+          localAdminSession:
+            []
+      responses:
+        "200":
+          description: "Success."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  tenant:
+                    "$ref": "#/components/schemas/Tenant"
+                required:
+                  ["tenant"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "Tenant, application, or retained notification not found."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "502":
+          description: "Telegram could not validate token."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      description: "Validates with getMe and rechecks version/ownership after network completion. Never returns token. Bot identity cannot switch after assignment; same-bot token rotation preserves secret."
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+        -
+          name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              type: "object"
+              properties:
+                botToken:
+                  type: "string"
+                  minLength: 1
+                  maxLength: 256
+                  writeOnly: true
+                expectedVersion:
+                  type: "integer"
+                  minimum: 1
+                  description: "Version last observed by the client; stale writes return 409."
+              required:
+                ["botToken"]
+              additionalProperties: false
+  "/telegram/{tenantId}/webhook":
+    post:
+      operationId: "telegramWebhookForTenant"
+      summary: "Receive tenant Telegram subscription/preferences updates"
+      tags:
+        ["Telegram"]
+      security:
+        -
+          telegramWebhookSecret:
+            []
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/TelegramUpdate"
+      responses:
+        "200":
+          description: "Update processed or safely ignored."
+          content:
+            "application/json":
+              schema:
+                type: "object"
+                properties:
+                  ok:
+                    const: true
+                required:
+                  ["ok"]
+                additionalProperties: false
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+      parameters:
+        -
+          name: "tenantId"
+          in: "path"
+          required: true
+          schema:
+            type: "string"
+            pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          description: "Tenant ID. The default tenant is named default."
+components:
+  securitySchemes:
+    bearerAuth:
+      type: "http"
+      scheme: "bearer"
+      description: "Application API key created or rotated in the dashboard for the selected tenant. Master admin keys are rejected. Producer keys are not read from the Worker's environment."
+    apiKeyHeader:
+      type: "apiKey"
+      in: "header"
+      name: "X-API-Key"
+      description: "Alternative application credential header. Credentials are never read from URL query parameters."
+    adminSession:
+      type: "apiKey"
+      in: "cookie"
+      name: "__Host-relay_session"
+      description: "HttpOnly secure session issued by /api/admin/login on HTTPS."
+    localAdminSession:
+      type: "apiKey"
+      in: "cookie"
+      name: "relay_session"
+      description: "Development-only session cookie for an HTTP origin."
+    telegramWebhookSecret:
+      type: "apiKey"
+      in: "header"
+      name: "X-Telegram-Bot-Api-Secret-Token"
+      description: "Selected tenant's private webhook secret. The default tenant may use TELEGRAM_WEBHOOK_SECRET until overridden."
+  schemas:
+    Error:
+      type: "object"
+      properties:
+        error:
+          type: "object"
+          properties:
+            code:
+              type: "string"
+            message:
+              type: "string"
+              description: "Human-readable message; usually Persian."
+          required:
+            ["code","message"]
+          additionalProperties: false
+      required:
+        ["error"]
+      additionalProperties: false
+    NotificationInput:
+      type: "object"
+      properties:
+        application:
+          description: "Optional compatibility field. Any value is replaced with the authenticated application's configured name."
+        event:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+        text:
+          type: "string"
+          maxLength: 3000
+          minLength: 1
+        level:
+          type: "string"
+          enum:
+            ["info","success","warning","error","critical"]
+          default: "info"
+        timestamp:
+          type: "string"
+          format: "date-time"
+          maxLength: 40
+          pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
+          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time."
+        title:
+          type: "string"
+          maxLength: 160
+          minLength: 1
+        image:
+          type: "string"
+          maxLength: 2048
+          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs; no multipart/base64 uploads."
+          minLength: 1
+        url:
+          type: "string"
+          maxLength: 2048
+          description: "HTTPS incident/dashboard/pipeline link without embedded credentials."
+          format: "uri"
+          pattern: "^https://"
+        environment:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+        metadata:
+          type: "object"
+          maxProperties: 20
+          propertyNames:
+            type: "string"
+            minLength: 1
+            maxLength: 40
+          additionalProperties:
+            oneOf:
+              -
+                type: "string"
+                maxLength: 500
+              -
+                type: "number"
+              -
+                type: "boolean"
+        tags:
+          type: "array"
+          items:
+            type: "string"
+            maxLength: 40
+            minLength: 1
+          maxItems: 10
+        silent:
+          type: "boolean"
+          default: false
+      required:
+        ["event","text"]
+      additionalProperties: false
+      description: "Application identity/name come from the header key. Unknown fields (including caller-supplied applicationId or chat_id) are rejected. Strings are trimmed. Full formatted plain text must be at most 4,000 characters in addition to individual limits."
+      examples:
+        -
+          event: "deployment.completed"
+          level: "success"
+          text: "Version 2.4.1 is healthy."
+          environment: "production"
+          metadata:
+            version: "2.4.1"
+          tags:
+            ["deploy"]
+    NotificationRecord:
+      type: "object"
+      properties:
+        application:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+        event:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+        text:
+          type: "string"
+          maxLength: 3000
+          minLength: 1
+        level:
+          type: "string"
+          enum:
+            ["info","success","warning","error","critical"]
+          default: "info"
+        timestamp:
+          type: "string"
+          format: "date-time"
+          maxLength: 40
+          pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
+          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time."
+        title:
+          type: "string"
+          maxLength: 160
+          minLength: 1
+        image:
+          type: "string"
+          maxLength: 2048
+          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs; no multipart/base64 uploads."
+          minLength: 1
+        url:
+          type: "string"
+          maxLength: 2048
+          description: "HTTPS incident/dashboard/pipeline link without embedded credentials."
+          format: "uri"
+          pattern: "^https://"
+        environment:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+        metadata:
+          type: "object"
+          maxProperties: 20
+          propertyNames:
+            type: "string"
+            minLength: 1
+            maxLength: 40
+          additionalProperties:
+            oneOf:
+              -
+                type: "string"
+                maxLength: 500
+              -
+                type: "number"
+              -
+                type: "boolean"
+        tags:
+          type: "array"
+          items:
+            type: "string"
+            maxLength: 40
+            minLength: 1
+          maxItems: 10
+        silent:
+          type: "boolean"
+          default: false
+        id:
+          type: "string"
+          format: "uuid"
+        createdAt:
+          type: "string"
+          format: "date-time"
+        source:
+          "$ref": "#/components/schemas/SourceContext"
+        status:
+          type: "string"
+          enum:
+            ["queued","sending","completed","partial","failed","empty"]
+        total:
+          type: "integer"
+          minimum: 0
+        sent:
+          type: "integer"
+          minimum: 0
+        failed:
+          type: "integer"
+          minimum: 0
+        pending:
+          type: "integer"
+          minimum: 0
+          description: "Includes pending and in-flight recipient jobs."
+        unknown:
+          type: "integer"
+          minimum: 0
+        skipped:
+          type: "integer"
+          minimum: 0
+        applicationId:
+          type: "string"
+          maxLength: 48
+          description: "Authenticated application identity. Older legacy history may omit it."
+      required:
+        ["application","event","text","level","timestamp","id","createdAt","source","status","total","sent","failed","pending","unknown","skipped"]
+      additionalProperties: false
+    Acceptance:
+      type: "object"
+      properties:
+        notification:
+          "$ref": "#/components/schemas/NotificationRecord"
+        duplicate:
+          type: "boolean"
+      required:
+        ["notification","duplicate"]
+      additionalProperties: false
+    NotificationDetail:
+      type: "object"
+      properties:
+        notification:
+          "$ref": "#/components/schemas/NotificationRecord"
+      required:
+        ["notification"]
+      additionalProperties: false
+    BatchAcceptance:
+      type: "object"
+      properties:
+        notifications:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/Acceptance"
+          maxItems: 20
+      required:
+        ["notifications"]
+      additionalProperties: false
+    SourceContext:
+      type: "object"
+      properties:
+        ip:
+          type: "string"
+          description: "Cloudflare-provided connecting IP; loopback during local development without CF metadata."
+        country:
+          type: "string"
+          description: "Cloudflare request.cf.country, or XX when unavailable."
+        source:
+          type: "string"
+          enum:
+            ["api","admin","alertmanager","grafana"]
+      required:
+        ["ip","country","source"]
+      additionalProperties: false
+    Settings:
+      type: "object"
+      properties:
+        projectName:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+          default: "Telegram Relay"
+        paused:
+          type: "boolean"
+          default: false
+          description: "Pause delivery while continuing to persist incoming notifications."
+        ipMode:
+          type: "string"
+          enum:
+            ["off","allow","deny"]
+          default: "off"
+        ipRules:
+          type: "array"
+          items:
+            type: "string"
+            description: "IPv4, IPv6, or CIDR rule."
+          maxItems: 100
+          uniqueItems: true
+          description: "An allow policy requires at least one rule."
+        countryMode:
+          type: "string"
+          enum:
+            ["off","allow","deny"]
+          default: "off"
+        countries:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/CountryCode"
+          maxItems: 250
+          uniqueItems: true
+          description: "Uppercase two-letter country codes. An allow policy requires at least one country. Unknown geolocation is denied whenever country filtering is enabled."
+        showCountryFlag:
+          type: "boolean"
+          default: true
+          description: "Include the source country flag in formatted Telegram notifications."
+        deliveryPerSecond:
+          type: "integer"
+          minimum: 1
+          maximum: 20
+          default: 10
+          description: "Global Telegram request pacing; per-chat pacing and Telegram cooldowns also apply."
+        retentionDays:
+          type: "integer"
+          minimum: 7
+          maximum: 90
+          default: 30
+          description: "Cleanup age for completed history. Cleanup is bounded and unfinished jobs are preserved."
+        welcomeMessage:
+          type: "string"
+          maxLength: 1000
+          minLength: 0
+          description: "Welcome text for a new/reactivated private /start subscription. An empty string disables the welcome message."
+      required:
+        ["projectName","paused","ipMode","ipRules","countryMode","countries","showCountryFlag","deliveryPerSecond","retentionDays","welcomeMessage"]
+      additionalProperties: false
+    SettingsUpdate:
+      type: "object"
+      properties:
+        projectName:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+          default: "Telegram Relay"
+        paused:
+          type: "boolean"
+          default: false
+          description: "Pause delivery while continuing to persist incoming notifications."
+        ipMode:
+          type: "string"
+          enum:
+            ["off","allow","deny"]
+          default: "off"
+        ipRules:
+          type: "array"
+          items:
+            type: "string"
+            description: "IPv4, IPv6, or CIDR rule."
+          maxItems: 100
+          uniqueItems: true
+          description: "An allow policy requires at least one rule."
+        countryMode:
+          type: "string"
+          enum:
+            ["off","allow","deny"]
+          default: "off"
+        countries:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/CountryCode"
+          maxItems: 250
+          uniqueItems: true
+          description: "Uppercase two-letter country codes. An allow policy requires at least one country. Unknown geolocation is denied whenever country filtering is enabled."
+        showCountryFlag:
+          type: "boolean"
+          default: true
+          description: "Include the source country flag in formatted Telegram notifications."
+        deliveryPerSecond:
+          type: "integer"
+          minimum: 1
+          maximum: 20
+          default: 10
+          description: "Global Telegram request pacing; per-chat pacing and Telegram cooldowns also apply."
+        retentionDays:
+          type: "integer"
+          minimum: 7
+          maximum: 90
+          default: 30
+          description: "Cleanup age for completed history. Cleanup is bounded and unfinished jobs are preserved."
+        welcomeMessage:
+          type: "string"
+          maxLength: 1000
+          minLength: 0
+          description: "Welcome text for a new/reactivated private /start subscription. An empty string disables the welcome message."
+      required:
+        []
+      additionalProperties: false
+      description: "Partial settings update; omitted fields retain their current values. Unknown fields are rejected. Settings are validated as a complete merged object."
+    Subscriber:
+      type: "object"
+      properties:
+        chatId:
+          type: "string"
+        firstName:
+          type: "string"
+        username:
+          type:
+            ["string","null"]
+        active:
+          type: "boolean"
+        joinedAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+        banned:
+          type: "boolean"
+        banReason:
+          type:
+            ["string","null"]
+        applicationMode:
+          type: "string"
+          enum:
+            ["all","selected"]
+        applicationIds:
+          type: "array"
+          items:
+            type: "string"
+            maxLength: 48
+      required:
+        ["chatId","firstName","username","active","joinedAt","updatedAt","banned","banReason","applicationMode","applicationIds"]
+      additionalProperties: false
+    SubscriberPage:
+      type: "object"
+      properties:
+        items:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/Subscriber"
+        total:
+          type: "integer"
+          minimum: 0
+        page:
+          type: "integer"
+          minimum: 1
+        pageSize:
+          type: "integer"
+          const: 20
+      required:
+        ["items","total","page","pageSize"]
+      additionalProperties: false
+    NotificationPage:
+      type: "object"
+      properties:
+        items:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/NotificationRecord"
+        total:
+          type: "integer"
+          minimum: 0
+        page:
+          type: "integer"
+          minimum: 1
+        pageSize:
+          type: "integer"
+          const: 20
+      required:
+        ["items","total","page","pageSize"]
+      additionalProperties: false
+    Delivery:
+      type: "object"
+      properties:
+        chatId:
+          type: "string"
+        status:
+          type: "string"
+          enum:
+            ["pending","sending","sent","failed","unknown","skipped"]
+        attempts:
+          type: "integer"
+          minimum: 0
+        error:
+          type:
+            ["string","null"]
+        stage:
+          type: "integer"
+          minimum: 0
+          maximum: 1
+          description: "1 means a photo was accepted before a separate text-message stage."
+        partial:
+          type: "boolean"
+          description: "Photo was accepted but the whole notification has not completed."
+      required:
+        ["chatId","status","attempts","error","stage","partial"]
+      additionalProperties: false
+    AdminNotificationDetail:
+      type: "object"
+      properties:
+        notification:
+          "$ref": "#/components/schemas/NotificationRecord"
+        deliveryTotal:
+          type: "integer"
+          minimum: 0
+        deliveries:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/Delivery"
+          maxItems: 100
+          description: "First 100 recipient records in insertion order. Compare deliveryTotal to detect truncation."
+      required:
+        ["notification","deliveryTotal","deliveries"]
+      additionalProperties: false
+    Overview:
+      type: "object"
+      properties:
+        subscribers:
+          type: "object"
+          properties:
+            total:
+              type: "integer"
+              minimum: 0
+            active:
+              type: "integer"
+              minimum: 0
+          required:
+            ["total","active"]
+          additionalProperties: false
+        notifications:
+          type: "object"
+          properties:
+            total:
+              type: "integer"
+              minimum: 0
+            today:
+              type: "integer"
+              minimum: 0
+          required:
+            ["total","today"]
+          additionalProperties: false
+        deliveries:
+          type: "object"
+          properties:
+            sent:
+              type: "integer"
+              minimum: 0
+            failed:
+              type: "integer"
+              minimum: 0
+            pending:
+              type: "integer"
+              minimum: 0
+            unknown:
+              type: "integer"
+              minimum: 0
+            skipped:
+              type: "integer"
+              minimum: 0
+          required:
+            ["sent","failed","pending","unknown","skipped"]
+          additionalProperties: false
+        daily:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              date:
+                type: "string"
+                format: "date"
+              sent:
+                type: "integer"
+                minimum: 0
+              failed:
+                type: "integer"
+                minimum: 0
+            required:
+              ["date","sent","failed"]
+            additionalProperties: false
+          maxItems: 7
+        levels:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              level:
+                type: "string"
+                enum:
+                  ["info","success","warning","error","critical"]
+              count:
+                type: "integer"
+                minimum: 0
+            required:
+              ["level","count"]
+            additionalProperties: false
+          maxItems: 5
+        recent:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/NotificationRecord"
+          maxItems: 6
+      required:
+        ["subscribers","notifications","deliveries","daily","levels","recent"]
+      additionalProperties: false
+    AdminStatus:
+      type: "object"
+      properties:
+        configured:
+          type: "object"
+          properties:
+            bot:
+              type: "boolean"
+              description: "Selected tenant has a privately stored bot token configured through its bot settings."
+            webhookSecret:
+              type: "boolean"
+            apiKey:
+              type: "boolean"
+              description: "At least one enabled application has a producer credential."
+          required:
+            ["bot","webhookSecret","apiKey"]
+          additionalProperties: false
+        bot:
+          type:
+            ["object","null"]
+          additionalProperties: true
+          description: "Telegram getMe result, or null if unavailable."
+        webhook:
+          type:
+            ["object","null"]
+          additionalProperties: true
+          description: "Telegram getWebhookInfo result, or null if unavailable."
+        telegramError:
+          type: "string"
+          description: "Present when the live Telegram status request fails."
+        checkedAt:
+          type: "string"
+          format: "date-time"
+      required:
+        ["configured","bot","webhook","checkedAt"]
+      additionalProperties: false
+      description: "Cached for 60 seconds with concurrent refresh coalescing and mutation invalidation. No bot tokens/webhook secrets are included."
+    AlertmanagerWebhook:
+      type: "object"
+      properties:
+        alerts:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/AlertmanagerAlert"
+          maxItems: 20
+          minItems: 1
+        status:
+          type: "string"
+          enum:
+            ["firing","resolved"]
+        receiver:
+          type: "string"
+        groupLabels:
+          type: "object"
+          additionalProperties:
+            type: "string"
+        commonLabels:
+          type: "object"
+          additionalProperties:
+            type: "string"
+        commonAnnotations:
+          type: "object"
+          additionalProperties:
+            type: "string"
+        externalURL:
+          type: "string"
+        version:
+          type: "string"
+        groupKey:
+          type: "string"
+        truncatedAlerts:
+          type: "integer"
+          minimum: 0
+      required:
+        ["alerts"]
+      additionalProperties: true
+    AlertmanagerAlert:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum:
+            ["firing","resolved"]
+        labels:
+          type: "object"
+          additionalProperties:
+            type: "string"
+          description: "alertname selects event; severity/environment are mapped. The authenticated application key overrides sender labels."
+        annotations:
+          type: "object"
+          additionalProperties:
+            type: "string"
+          description: "description or summary becomes message text; summary becomes title."
+        startsAt:
+          type: "string"
+          format: "date-time"
+        endsAt:
+          type: "string"
+          format: "date-time"
+        generatorURL:
+          type: "string"
+        fingerprint:
+          type: "string"
+      required:
+        []
+      additionalProperties: true
+    GrafanaWebhook:
+      type: "object"
+      properties:
+        status:
+          type: "string"
+          enum:
+            ["firing","resolved"]
+        title:
+          type: "string"
+        message:
+          type: "string"
+        commonLabels:
+          type: "object"
+          additionalProperties:
+            type: "string"
+          description: "severity/environment are mapped. The authenticated application key determines the sender."
+        externalURL:
+          type: "string"
+        alerts:
+          type: "array"
+          items:
+            type: "object"
+            additionalProperties: true
+      required:
+        []
+      additionalProperties: true
+    TelegramUpdate:
+      type: "object"
+      description: "Private /start, /stop, /apps, /all, my_chat_member, and owned application-selection callbacks are processed. New subscriptions receive all applications; bans prevent re-enrollment."
+      properties:
+        update_id:
+          type: "integer"
+        message:
+          type: "object"
+          additionalProperties: true
+        my_chat_member:
+          type: "object"
+          additionalProperties: true
+        callback_query:
+          type: "object"
+          additionalProperties: true
+      additionalProperties: true
+    CountryCode:
+      type: "string"
+      description: "ISO 3166-1 alpha-2 codes supported by the relay. Unknown/pseudo-countries are excluded."
+      enum:
+        ["AD","AE","AF","AG","AI","AL","AM","AO","AQ","AR","AS","AT","AU","AW","AX","AZ","BA","BB","BD","BE","BF","BG","BH","BI","BJ","BL","BM","BN","BO","BQ","BR","BS","BT","BV","BW","BY","BZ","CA","CC","CD","CF","CG","CH","CI","CK","CL","CM","CN","CO","CR","CU","CV","CW","CX","CY","CZ","DE","DJ","DK","DM","DO","DZ","EC","EE","EG","EH","ER","ES","ET","FI","FJ","FK","FM","FO","FR","GA","GB","GD","GE","GF","GG","GH","GI","GL","GM","GN","GP","GQ","GR","GS","GT","GU","GW","GY","HK","HM","HN","HR","HT","HU","ID","IE","IL","IM","IN","IO","IQ","IR","IS","IT","JE","JM","JO","JP","KE","KG","KH","KI","KM","KN","KP","KR","KW","KY","KZ","LA","LB","LC","LI","LK","LR","LS","LT","LU","LV","LY","MA","MC","MD","ME","MF","MG","MH","MK","ML","MM","MN","MO","MP","MQ","MR","MS","MT","MU","MV","MW","MX","MY","MZ","NA","NC","NE","NF","NG","NI","NL","NO","NP","NR","NU","NZ","OM","PA","PE","PF","PG","PH","PK","PL","PM","PN","PR","PS","PT","PW","PY","QA","RE","RO","RS","RU","RW","SA","SB","SC","SD","SE","SG","SH","SI","SJ","SK","SL","SM","SN","SO","SR","SS","ST","SV","SX","SY","SZ","TC","TD","TF","TG","TH","TJ","TK","TL","TM","TN","TO","TR","TT","TV","TW","TZ","UA","UG","UM","US","UY","UZ","VA","VC","VE","VG","VI","VN","VU","WF","WS","YE","YT","ZA","ZM","ZW"]
+    AdminNotificationInput:
+      type: "object"
+      properties:
+        application:
+          description: "Optional compatibility field. Any value is replaced with the authenticated application's configured name."
+        event:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+        text:
+          type: "string"
+          maxLength: 3000
+          minLength: 1
+        level:
+          type: "string"
+          enum:
+            ["info","success","warning","error","critical"]
+          default: "info"
+        timestamp:
+          type: "string"
+          format: "date-time"
+          maxLength: 40
+          pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
+          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time."
+        title:
+          type: "string"
+          maxLength: 160
+          minLength: 1
+        image:
+          type: "string"
+          maxLength: 2048
+          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs; no multipart/base64 uploads."
+          minLength: 1
+        url:
+          type: "string"
+          maxLength: 2048
+          description: "HTTPS incident/dashboard/pipeline link without embedded credentials."
+          format: "uri"
+          pattern: "^https://"
+        environment:
+          type: "string"
+          maxLength: 80
+          minLength: 1
+        metadata:
+          type: "object"
+          maxProperties: 20
+          propertyNames:
+            type: "string"
+            minLength: 1
+            maxLength: 40
+          additionalProperties:
+            oneOf:
+              -
+                type: "string"
+                maxLength: 500
+              -
+                type: "number"
+              -
+                type: "boolean"
+        tags:
+          type: "array"
+          items:
+            type: "string"
+            maxLength: 40
+            minLength: 1
+          maxItems: 10
+        silent:
+          type: "boolean"
+          default: false
+        applicationId:
+          type: "string"
+          minLength: 2
+          maxLength: 48
+      required:
+        ["applicationId","event","text"]
+      additionalProperties: false
+      description: "Dashboard broadcasts require an enabled applicationId in this tenant. Its configured name replaces application."
+      examples:
+        -
+          event: "deployment.completed"
+          level: "success"
+          text: "Version 2.4.1 is healthy."
+          environment: "production"
+          metadata:
+            version: "2.4.1"
+          tags:
+            ["deploy"]
+          applicationId: "payments-api"
+    TenantLimits:
+      type: "object"
+      properties:
+        requestsPerMinute:
+          type: "integer"
+          minimum: 1
+          maximum: 10000
+          default: 120
+        notificationsPerDay:
+          type: "integer"
+          minimum: 1
+          maximum: 1000000
+          default: 10000
+        maxSubscribers:
+          type: "integer"
+          minimum: 1
+          maximum: 1000000
+          default: 10000
+        maxPendingDeliveries:
+          type: "integer"
+          minimum: 1
+          maximum: 1000000
+          default: 100000
+      required:
+        ["requestsPerMinute","notificationsPerDay","maxSubscribers","maxPendingDeliveries"]
+      additionalProperties: false
+    TenantLimitsUpdate:
+      type: "object"
+      properties:
+        requestsPerMinute:
+          type: "integer"
+          minimum: 1
+          maximum: 10000
+          default: 120
+        notificationsPerDay:
+          type: "integer"
+          minimum: 1
+          maximum: 1000000
+          default: 10000
+        maxSubscribers:
+          type: "integer"
+          minimum: 1
+          maximum: 1000000
+          default: 10000
+        maxPendingDeliveries:
+          type: "integer"
+          minimum: 1
+          maximum: 1000000
+          default: 100000
+      required:
+        []
+      additionalProperties: false
+    Tenant:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+        name:
+          type: "string"
+          minLength: 1
+          maxLength: 80
+        enabled:
+          type: "boolean"
+        isDefault:
+          type: "boolean"
+        createdAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+        version:
+          type: "integer"
+          minimum: 1
+          description: "Version last observed by the client; stale writes return 409."
+        limits:
+          "$ref": "#/components/schemas/TenantLimits"
+        botConfigured:
+          type: "boolean"
+        botId:
+          type:
+            ["string","null"]
+        botUsername:
+          type:
+            ["string","null"]
+      required:
+        ["id","name","enabled","isDefault","createdAt","updatedAt","version","limits","botConfigured","botId","botUsername"]
+      additionalProperties: false
+    TenantCreate:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+          not:
+            const: "default"
+        name:
+          type: "string"
+          minLength: 1
+          maxLength: 80
+        limits:
+          "$ref": "#/components/schemas/TenantLimitsUpdate"
+      required:
+        ["id","name"]
+      additionalProperties: false
+    TenantUpdate:
+      type: "object"
+      properties:
+        name:
+          type: "string"
+          minLength: 1
+          maxLength: 80
+        enabled:
+          type: "boolean"
+        limits:
+          "$ref": "#/components/schemas/TenantLimitsUpdate"
+        expectedVersion:
+          type: "integer"
+          minimum: 1
+          description: "Version last observed by the client; stale writes return 409."
+      required:
+        []
+      additionalProperties: false
+    Application:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          maxLength: 48
+        name:
+          type: "string"
+          maxLength: 80
+        enabled:
+          type: "boolean"
+        createdAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+        version:
+          type: "integer"
+          minimum: 1
+          description: "Version last observed by the client; stale writes return 409."
+        isLegacy:
+          type: "boolean"
+        keyConfigured:
+          type: "boolean"
+      required:
+        ["id","name","enabled","createdAt","updatedAt","version","isLegacy","keyConfigured"]
+      additionalProperties: false
+    ApplicationCreate:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
+        name:
+          type: "string"
+          minLength: 1
+          maxLength: 80
+      required:
+        ["id","name"]
+      additionalProperties: false
+    ApplicationUpdate:
+      type: "object"
+      properties:
+        name:
+          type: "string"
+          minLength: 1
+          maxLength: 80
+        enabled:
+          type: "boolean"
+        expectedVersion:
+          type: "integer"
+          minimum: 1
+          description: "Version last observed by the client; stale writes return 409."
+      required:
+        []
+      additionalProperties: false
+    ApplicationKeyResult:
+      type: "object"
+      properties:
+        application:
+          "$ref": "#/components/schemas/Application"
+        apiKey:
+          type: "string"
+          description: "Full generated application key, shown only in create/rotate response. Only its hash persists."
+      required:
+        ["application","apiKey"]
+      additionalProperties: false
+    TenantUsage:
+      type: "object"
+      properties:
+        day:
+          type: "string"
+          format: "date"
+        notificationsToday:
+          type: "integer"
+          minimum: 0
+        activeSubscribers:
+          type: "integer"
+          minimum: 0
+        pendingDeliveries:
+          type: "integer"
+          minimum: 0
+      required:
+        ["day","notificationsToday","activeSubscribers","pendingDeliveries"]
+      additionalProperties: false
+    BanInput:
+      type: "object"
+      properties:
+        chatIds:
+          type: "array"
+          minItems: 1
+          maxItems: 100
+          items:
+            type: "string"
+            pattern: "^-?[0-9]{1,20}$"
+        banned:
+          type: "boolean"
+        reason:
+          type: "string"
+          maxLength: 200
+      required:
+        ["chatIds","banned"]
+      additionalProperties: false
+  responses:
+    BadRequest:
+      description: "Invalid JSON, notification, integration payload, settings, or parameter."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    Unauthorized:
+      description: "Missing/incorrect application key or admin credentials, disabled application, or expired session."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    Forbidden:
+      description: "Disabled tenant, tenant IP/country policy rejection, or mismatched admin Origin."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    BodyTooLarge:
+      description: "Request body exceeds 65,536 bytes."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    UnsupportedMediaType:
+      description: "JSON requests require Content-Type: application/json, optionally with parameters."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    RateLimited:
+      description: "Tenant minute/daily/subscriber/pending-queue quota or admin operation limit exceeded. Retry-After is supplied for minute/login limits."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+      headers:
+        Retry-After:
+          description: "Seconds to wait; present for login and public API rate limits."
+          schema:
+            type: "integer"
+            minimum: 1
+    InternalError:
+      description: "Unexpected service error."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    NotConfigured:
+      description: "Required environment secrets are not configured."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"

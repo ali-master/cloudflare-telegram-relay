@@ -1,21 +1,129 @@
-```txt
-npm install
+# Telegram Relay
+
+A lightweight Telegram notification gateway for monitoring, alerts, and CI/CD, running on Cloudflare Workers.
+
+Each **tenant** has its own bot, applications, subscribers, limits, and reports. Each **application** gets an API key for sending notifications.
+
+- Text, images, severity, timestamps, metadata, and incident links.
+- Persian RTL dashboard with locally hosted Estedad and light, dark, or system theme.
+- IP/CIDR and country restrictions, quotas, and individual or bulk subscriber bans.
+- Admin-only failed-login audit with IP, country, time, and client details.
+- Telegram application subscriptions: receive everything by default, or choose specific apps.
+- Persistent delivery queues and reports in SQLite Durable Objects, with caching to reduce database reads.
+
+## Deploy to Cloudflare
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ali-master/cloudflare-telegram-relay)
+
+You need a Cloudflare account and a Telegram bot from [@BotFather](https://t.me/BotFather).
+
+1. Use the deploy button, connect GitHub or GitLab, and choose your repository and Worker names.
+2. Set **`API_KEY`** to a unique admin login key. Generate one with `openssl rand -hex 32` and save it in your password manager.
+3. Deploy, open the Worker URL, and log in with that key.
+
+Cloudflare creates the required Durable Objects from `wrangler.jsonc`. No separate database or queue setup is needed.
+
+### Deploy from your terminal
+
+With **Node.js 22+** and npm, run:
+
+```sh
+git clone https://github.com/ali-master/cloudflare-telegram-relay.git
+cd cloudflare-telegram-relay
+npm ci
+cp .dev.vars.example .dev.vars
+openssl rand -hex 32
+```
+
+Paste the generated value into `API_KEY` in `.dev.vars`. Review the Worker name in `wrangler.jsonc`, then deploy:
+
+```sh
+npx wrangler login
+npm run deploy -- --secrets-file .dev.vars
+```
+
+The first deployment uploads the code and admin secret together. For later code updates, use `npm run deploy`; Cloudflare retains the existing secret.
+
+### Where configuration lives
+
+| Setting | Where to configure it |
+| --- | --- |
+| Admin login `API_KEY` | Cloudflare Worker Secret; locally, `.dev.vars` |
+| Bot token and webhook | Dashboard → select a tenant → Settings |
+| Application API keys | Dashboard → Applications |
+| Tenant quotas | Dashboard → Tenants |
+| IP/country restrictions and delivery settings | Dashboard → Settings |
+
+`API_KEY` is the only required environment secret. Its name is declared in `wrangler.jsonc` under `secrets.required`; the value stays out of source control. `.dev.vars.example` and `package.json` describe the secret for the deploy button.
+
+To change the key later, run `npx wrangler secret put API_KEY`, or open **Workers & Pages → your Worker → Settings → Variables and Secrets → Add**, choose **Secret**, enter `API_KEY`, and **Deploy**. Changing the key signs out existing admin sessions.
+
+## Connect your bot
+
+1. Log in to the dashboard and select the default tenant, or create a tenant.
+2. In **Settings**, paste its BotFather token and save it. The relay verifies the bot and generates its webhook secret.
+3. Click **Register webhook** on the deployed HTTPS URL.
+4. In **Applications**, create an application and save the generated API key; it is only shown when created or rotated.
+5. Open the bot in Telegram and send `/start`.
+
+Use a separate bot for each tenant. Telegram webhooks need public HTTPS; localhost cannot receive Telegram updates.
+
+## Send your first notification
+
+For ready-to-copy requests, select a tenant in the dashboard and open **API Guide**. The page uses that tenant's URL and limits, with examples for sending and tracking notifications. Each tenant also has an API Guide shortcut in **Tenants**.
+
+Replace the URL, tenant ID, and application key below. Use the application's key, **not** the admin login key.
+
+```sh
+export RELAY_URL='https://your-relay.your-subdomain.workers.dev'
+export RELAY_TENANT='default'
+export RELAY_APPLICATION_KEY='replace-with-your-application-key'
+
+curl --fail-with-body "$RELAY_URL/api/v1/tenants/$RELAY_TENANT/notifications" \
+  --header "X-API-Key: $RELAY_APPLICATION_KEY" \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "event": "deployment.completed",
+    "level": "success",
+    "text": "Version 1.0.0 is live.",
+    "environment": "production",
+    "url": "https://ci.example.com/pipelines/123"
+  }'
+```
+
+Only `event` and `text` are required. Optional fields include `title`, `timestamp`, `image` (HTTPS URL or Telegram file ID), `metadata`, `tags`, and `silent`. The API key identifies the application automatically. `Authorization: Bearer <application-key>` also works.
+
+A `202` response means the notification was accepted; delivery runs in the background when there are eligible subscribers. Track delivery in the dashboard or with `GET /api/v1/tenants/{tenantId}/notifications/{id}`, using the same key. Add an `Idempotency-Key` header when retrying requests; keep the payload and key unchanged for retries, and use a new key for a new event.
+
+See [integration recipes](docs/integrations.md) for **GitHub Actions, GitLab CI, Alertmanager, and Grafana**, or the [OpenAPI reference](docs/openapi.yaml) for all endpoints and payload fields.
+
+## Subscriber controls
+
+| Telegram command | Action |
+| --- | --- |
+| `/start` | Subscribe to the bot's notifications |
+| `/apps` | Choose which applications to receive |
+| `/all` | Receive notifications from all applications |
+| `/stop` | Stop receiving notifications |
+
+Users with no application selection receive everything. Admins can ban users individually or in bulk from **Subscribers**. Banned users cannot resubscribe; after unbanning, they must send `/start` again. Bans and subscription changes can skip pending deliveries; messages already sent cannot be recalled.
+
+## Local development
+
+```sh
+npm ci
+cp .dev.vars.example .dev.vars
+# Fill in API_KEY with a random value.
 npm run dev
 ```
 
-```txt
-npm run deploy
-```
+Open [localhost:8787](http://localhost:8787) and log in with your local key. Local SQLite data is stored in `.wrangler/` and is separate from production. Use a separate test bot if you connect a public HTTPS development tunnel.
 
-[For generating/synchronizing types based on your Worker configuration run](https://developers.cloudflare.com/workers/wrangler/commands/#types):
+| Command | Purpose |
+| --- | --- |
+| `npm run check` | TypeScript checks |
+| `npm test` | Run the test suite |
+| `npm run deploy:check` | Build a deployment bundle without deploying |
+| `npm run cf-typegen` | Regenerate bindings after changing Wrangler config |
 
-```txt
-npm run cf-typegen
-```
-
-Pass the `CloudflareBindings` as generics when instantiating `Hono`:
-
-```ts
-// src/index.ts
-const app = new Hono<{ Bindings: CloudflareBindings }>()
-```
+The dashboard is plain HTML/CSS/JavaScript in `public/`; the Worker lives in `src/`. Keep Durable Object bindings, class names, and migration history intact when updating an existing deployment.
