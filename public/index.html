@@ -465,7 +465,7 @@
                 <div class="page-heading">
                     <div><span class="eyebrow muted">YOUR AUDIENCE</span>
                         <h1>یک بات، یک تیم باخبر<span class="accent">.</span></h1>
-                        <p>اعلان‌های هر اپلیکیشن به مشترکان فعال انتخاب‌کنندهٔ آن می‌رسد.</p></div>
+                        <p>پروفایل، عضویت و دسترسی هر مشترک به اپلیکیشن‌های این فضا.</p></div>
                 </div>
                 <div class="notice mint-notice">
                     <svg class="icon">
@@ -485,6 +485,15 @@
                         <svg class="icon muted">
                             <use href="#i-users"/>
                         </svg>
+                    </div>
+                    <div class="table-toolbar subscriber-search-toolbar">
+                        <div class="search-field">
+                            <svg class="icon">
+                                <use href="#i-search"/>
+                            </svg>
+                            <input id="subscriber-search" type="search" maxlength="100" aria-label="جست‌وجوی مشترک"
+                                   placeholder="نام، نام کاربری یا شناسهٔ چت…"></div>
+                        <span class="muted">دسترسی مدیر و انتخاب کاربر، هر دو در دریافت اعلان مؤثرند.</span>
                     </div>
                     <div class="subscriber-toolbar"><label class="checkbox-label"><input id="select-all-subscribers"
                                                                                          type="checkbox">انتخاب صفحهٔ
@@ -856,7 +865,7 @@
                 <article class="card api-guide-section">
                     <div class="card-header">
                         <div><h2>اعلان در تلگرام چگونه نمایش داده می‌شود؟</h2>
-                            <p>عنوان و متن راست‌به‌چپ، اطلاعات فنی در بلوک‌های منظم با قلم ثابت.</p></div>
+                            <p>عنوان و متن فارسی، اطلاعات فنی در بلوک‌های منظم با قلم ثابت.</p></div>
                     </div>
                     <div class="api-response-body">
                         <ul class="api-status-notes">
@@ -1173,7 +1182,138 @@
         </main>
     </div>
 </div>
-<dialog id="application-dialog" class="modal" aria-labelledby="application-dialog-heading">
+<dialog id="subscriber-profile-dialog" class="modal subscriber-profile" aria-labelledby="subscriber-profile-heading">
+    <div class="subscriber-profile-heading">
+        <div><span class="eyebrow">SUBSCRIBER ACCESS</span>
+            <h2 id="subscriber-profile-heading">پروفایل و دسترسی مشترک</h2>
+            <p id="subscriber-profile-tenant" class="muted"></p></div>
+        <button type="button" class="icon-button" data-close-dialog aria-label="بستن پروفایل مشترک">
+            <svg class="icon">
+                <use href="#i-close"/>
+            </svg>
+        </button>
+    </div>
+    <div id="subscriber-profile-loading" class="subscriber-profile-loading" role="status"></div>
+    <form id="subscriber-profile-form" hidden>
+        <div class="subscriber-profile-body">
+            <aside class="subscriber-profile-person">
+                <div class="subscriber-identity-card">
+                    <div id="subscriber-profile-avatar" class="subscriber-profile-avatar" aria-hidden="true"></div>
+                    <h3 id="subscriber-profile-name" dir="auto"></h3>
+                    <p id="subscriber-profile-username" dir="ltr"></p>
+                    <div id="subscriber-profile-status" class="subscriber-profile-status"></div>
+                    <dl class="subscriber-identity-facts">
+                        <div>
+                            <dt>نام در تلگرام</dt>
+                            <dd id="subscriber-telegram-name" dir="auto"></dd>
+                        </div>
+                        <div>
+                            <dt>شناسهٔ چت</dt>
+                            <dd><code id="subscriber-profile-chat-id" dir="ltr"></code></dd>
+                        </div>
+                        <div>
+                            <dt>تاریخ عضویت</dt>
+                            <dd id="subscriber-profile-joined"></dd>
+                        </div>
+                    </dl>
+                    <p class="subscriber-identity-hint">
+                        <svg class="icon">
+                            <use href="#i-lock"/>
+                        </svg>
+                        هویت تلگرام از خود بات دریافت می‌شود.
+                    </p>
+                </div>
+                <div class="subscriber-profile-fields">
+                    <div class="field"><label for="subscriber-display-name">نام نمایشی <span
+                            class="muted">اختیاری</span></label><input id="subscriber-display-name" name="displayName"
+                                                                       maxlength="80" autocomplete="off"
+                                                                       placeholder="مثلاً سارا · تیم زیرساخت"><small>برای
+                        شناسایی در داشبورد؛ نام تلگرام تغییر نمی‌کند.</small></div>
+                    <div class="field"><label for="subscriber-notes">یادداشت مدیر <span id="subscriber-notes-count"
+                                                                                        class="muted">۰ / ۱٬۰۰۰</span></label><textarea
+                            id="subscriber-notes" name="notes" maxlength="1000" rows="4"
+                            placeholder="تیم، مسئولیت یا توضیحات مربوط به دسترسی…"></textarea><small>این یادداشت فقط در
+                        مدیریت نمایش داده می‌شود.</small></div>
+                </div>
+                <section class="subscriber-preferences" aria-labelledby="subscriber-preferences-heading">
+                    <div class="subscriber-section-heading">
+                        <svg class="icon">
+                            <use href="#i-users"/>
+                        </svg>
+                        <h3 id="subscriber-preferences-heading">انتخاب خود کاربر</h3><span>فقط مشاهده</span></div>
+                    <div id="subscriber-telegram-preferences"></div>
+                    <p>کاربر این انتخاب را با
+                        <bdi>/apps</bdi>
+                        در تلگرام تغییر می‌دهد. مجوز مدیر، انتخاب او را جایگزین نمی‌کند.
+                    </p>
+                </section>
+            </aside>
+            <section class="subscriber-access-panel" aria-labelledby="subscriber-access-heading">
+                <div class="subscriber-access-intro"><span class="subscriber-section-icon"><svg class="icon"><use
+                        href="#i-shield"/></svg></span>
+                    <div><h3 id="subscriber-access-heading">اجازهٔ دریافت از اپلیکیشن‌ها</h3>
+                        <p>تعیین کنید این مشترک از کدام سرویس‌ها اجازهٔ دریافت اعلان داشته باشد.</p></div>
+                </div>
+                <fieldset class="subscriber-access-modes">
+                    <legend class="sr-only">سیاست دسترسی مدیر</legend>
+                    <label class="subscriber-mode-card"><input type="radio" name="subscriberAccessMode" value="all"
+                                                               id="subscriber-access-all"><span><strong>همهٔ اپلیکیشن‌ها</strong><small>همهٔ موارد فعلی و اپلیکیشن‌های آینده</small></span>
+                        <svg class="icon">
+                            <use href="#i-globe"/>
+                        </svg>
+                    </label>
+                    <label class="subscriber-mode-card"><input type="radio" name="subscriberAccessMode" value="selected"
+                                                               id="subscriber-access-selected"><span><strong>فقط موارد انتخاب‌شده</strong><small>مجوز مشخص برای هر اپلیکیشن</small></span>
+                        <svg class="icon">
+                            <use href="#i-check"/>
+                        </svg>
+                    </label>
+                </fieldset>
+                <div id="subscriber-access-summary" class="subscriber-access-summary" role="status"></div>
+                <div class="subscriber-app-toolbar">
+                    <div class="search-field">
+                        <svg class="icon">
+                            <use href="#i-search"/>
+                        </svg>
+                        <input type="search" id="subscriber-app-search" aria-label="جست‌وجو در اپلیکیشن‌های دسترسی"
+                               placeholder="جست‌وجوی اپلیکیشن…"></div>
+                    <span id="subscriber-app-count" class="muted"></span></div>
+                <div class="subscriber-app-actions">
+                    <button id="subscriber-select-apps" type="button" class="text-button">انتخاب نتیجه‌ها</button>
+                    <button id="subscriber-clear-apps" type="button" class="text-button">پاک‌کردن همهٔ انتخاب‌ها
+                    </button>
+                    <span id="subscriber-mode-hint" class="muted"></span></div>
+                <div id="subscriber-access-apps" class="subscriber-access-apps"></div>
+                <p class="subscriber-access-explanation">
+                    <svg class="icon">
+                        <use href="#i-shield"/>
+                    </svg>
+                    <span>دریافت مؤثر به فعال بودن اپلیکیشن، قرار گرفتن در مخاطبان آن، مجوز مدیر، انتخاب کاربر و فعال و مسدود نبودن عضویت بستگی دارد. وضعیت کارت‌ها نتیجهٔ انتخاب‌های فعلی این فرم است.</span>
+                </p>
+            </section>
+        </div>
+        <div class="subscriber-profile-feedback"><p id="subscriber-profile-error" class="form-error" role="alert"
+                                                    hidden></p>
+            <button id="subscriber-profile-reload" type="button" class="text-button" hidden>دریافت نسخهٔ تازه و کنار
+                گذاشتن تغییرات فرم
+            </button>
+        </div>
+        <div class="subscriber-profile-footer">
+            <div><span class="subscriber-save-dot" aria-hidden="true"></span>
+                <p id="subscriber-profile-save-status" role="status">تغییرات پس از ذخیره اعمال می‌شوند.</p></div>
+            <div class="subscriber-profile-footer-actions">
+                <button type="button" class="button secondary" data-close-dialog>انصراف</button>
+                <button id="save-subscriber-profile" type="submit" class="button primary" disabled>
+                    <svg class="icon">
+                        <use href="#i-check"/>
+                    </svg>
+                    ذخیرهٔ تغییرات
+                </button>
+            </div>
+        </div>
+    </form>
+</dialog>
+<dialog id="application-dialog" class="modal application-profile" aria-labelledby="application-dialog-heading">
     <div class="modal-heading">
         <div><span class="eyebrow muted">APPLICATION IDENTITY</span>
             <h2 id="application-dialog-heading">ساخت اپلیکیشن</h2></div>
@@ -1201,11 +1341,63 @@
         <label id="application-enabled-row" class="switch-row separated" for="application-enabled"><span><strong>اپلیکیشن فعال باشد</strong><small>کلید اپلیکیشن غیرفعال، اعلان جدید ثبت نمی‌کند.</small></span><input
                 id="application-enabled" name="enabled" type="checkbox" role="switch" checked><span class="switch"
                                                                                                     aria-hidden="true"></span></label>
+        <section class="application-audience" aria-labelledby="application-audience-heading">
+            <div class="subscriber-access-intro"><span class="subscriber-section-icon"><svg class="icon"><use
+                    href="#i-users"/></svg></span>
+                <div><h3 id="application-audience-heading">مخاطبان این اپلیکیشن</h3>
+                    <p>اعلان‌های این سرویس فقط برای مخاطبان مجاز آن ارسال می‌شوند.</p></div>
+            </div>
+            <fieldset class="subscriber-access-modes">
+                <legend>دامنهٔ مخاطبان اپلیکیشن</legend>
+                <label class="subscriber-mode-card"><input id="application-audience-all" type="radio"
+                                                           name="applicationAudienceMode" value="all"><span><strong>همهٔ مشترکان</strong><small>همهٔ کاربران فعلی و اعضای آیندهٔ این فضا</small></span>
+                    <svg class="icon">
+                        <use href="#i-globe"/>
+                    </svg>
+                </label><label class="subscriber-mode-card"><input id="application-audience-selected" type="radio"
+                                                                   name="applicationAudienceMode"
+                                                                   value="selected"><span><strong>مشترکان انتخاب‌شده</strong><small>فقط افرادی که از فهرست انتخاب می‌کنید</small></span>
+                <svg class="icon">
+                    <use href="#i-check"/>
+                </svg>
+            </label></fieldset>
+            <div id="application-audience-summary" class="application-audience-summary" role="status"></div>
+            <div class="subscriber-app-toolbar">
+                <div class="search-field">
+                    <svg class="icon">
+                        <use href="#i-search"/>
+                    </svg>
+                    <input id="application-audience-search" type="search" maxlength="100"
+                           aria-label="جست‌وجوی مخاطبان اپلیکیشن" placeholder="نام، نام کاربری یا شناسهٔ چت…"></div>
+            </div>
+            <div class="subscriber-app-actions">
+                <button id="application-audience-select-page" class="text-button" type="button">انتخاب این صفحه</button>
+                <button id="application-audience-clear" class="text-button" type="button">پاک‌کردن همهٔ انتخاب‌ها
+                </button>
+                <span>انتخاب‌ها در جست‌وجو و تغییر صفحه حفظ می‌شوند.</span></div>
+            <div id="application-audience-list" class="application-audience-list"></div>
+            <div id="application-audience-pagination" class="pagination"></div>
+            <p class="subscriber-access-explanation">
+                <svg class="icon">
+                    <use href="#i-shield"/>
+                </svg>
+                <span>مجوزهای پروفایل مشترک، انتخاب او در تلگرام و وضعیت عضویت همچنان رعایت می‌شوند. انتخاب یک نفر در این فهرست به‌تنهایی دریافت اعلان را تضمین نمی‌کند.</span>
+            </p>
+        </section>
+        <label class="switch-row application-directory-control" for="application-show-directory"><span><strong>نمایش در فهرست بات</strong><small>این اپلیکیشن در منوی <bdi>/apps</bdi> دیده شود. پنهان کردن، مجوز دریافت مخاطبان را تغییر نمی‌دهد.</small></span><input
+                id="application-show-directory" name="showInDirectory" type="checkbox" role="switch" checked><span
+                class="switch" aria-hidden="true"></span></label>
         <p id="application-form-error" class="form-error" role="alert" hidden></p>
+        <button id="application-profile-reload" type="button" class="text-button" hidden>دریافت نسخهٔ تازه و کنار گذاشتن
+            تغییرات فرم
+        </button>
         <div id="application-key-actions" class="tenant-key-actions" hidden>
             <div><strong>تعویض کلید این اپلیکیشن</strong>
-                <p>کلید قبلی بلافاصله باطل می‌شود. سرویس را با کلید جدید به‌روز کنید.</p></div>
-            <button id="rotate-application-key" type="button" class="button secondary">
+                <p>کلید قبلی بلافاصله باطل می‌شود. سرویس را با کلید جدید به‌روز کنید.</p>
+                <p id="application-rotation-hint" role="status" hidden>برای تعویض کلید، ابتدا تغییرات فرم را ذخیره
+                    کنید.</p></div>
+            <button id="rotate-application-key" type="button" class="button secondary"
+                    aria-describedby="application-rotation-hint">
                 <svg class="icon">
                     <use href="#i-key"/>
                 </svg>

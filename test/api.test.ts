@@ -373,6 +373,90 @@ describe('tenant and application boundaries', () => {
       banned: true
     })).status).toBe(400);
   });
+  it('edits subscriber profiles and policies through both scoped routes with stale-write protection', async () => {
+    const session = await cookie();
+    await admin(session, '/settings', 'PUT', {paused: true, welcomeMessage: ''});
+    const webhook = (updateId: number, firstName: string) => request('/telegram/default/webhook', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': 'test-webhook-secret'},
+      body: JSON.stringify({update_id: updateId, message: {chat: {id: 333, type: 'private'}, from: {id: 333, first_name: firstName, username: 'operator'}, text: '/start'}})
+    });
+    expect((await webhook(700, 'Telegram name')).status).toBe(200);
+    const original = (await (await admin(session, '/subscribers/333')).json() as any).subscriber;
+    expect(original).toMatchObject({displayName: null, notes: '', accessMode: 'all', allowedApplicationIds: [], version: 1});
+    const edited = await admin(session, '/tenants/default/subscribers/333', 'PATCH', {
+      expectedVersion: original.version, displayName: '  تیم عملیات  ', notes: 'Internal support contact', accessMode: 'selected', allowedApplicationIds: ['test-integration']
+    });
+    expect(edited.status).toBe(200);
+    expect(edited.headers.get('Cache-Control')).toBe('no-store');
+    expect((await edited.json() as any).subscriber).toMatchObject({displayName: 'تیم عملیات', notes: 'Internal support contact', firstName: 'Telegram name', username: 'operator', version: 2, accessMode: 'selected', allowedApplicationIds: ['test-integration']});
+    const stale = await admin(session, '/subscribers/333', 'PATCH', {expectedVersion: 1, notes: 'Stale overwrite'});
+    expect(stale.status).toBe(409);
+    expect((await stale.json() as any).error.code).toBe('STALE_SUBSCRIBER');
+    expect((await webhook(701, 'Updated Telegram name')).status).toBe(200);
+    const rejoined = (await (await admin(session, '/subscribers/333')).json() as any).subscriber;
+    expect(rejoined).toMatchObject({firstName: 'Updated Telegram name', displayName: 'تیم عملیات', notes: 'Internal support contact', accessMode: 'selected', allowedApplicationIds: ['test-integration']});
+    const searched = await admin(session, '/subscribers?search=' + encodeURIComponent('عملیات'));
+    expect((await searched.json() as any)).toMatchObject({total: 1, items: [{chatId: '333', displayName: 'تیم عملیات'}]});
+    expect((await (await admin(session, '/subscribers?search=%25')).json() as any).total).toBe(0);
+    const restricted = await admin(session, '/subscribers/333', 'PATCH', {expectedVersion: rejoined.version, accessMode: 'selected', allowedApplicationIds: []});
+    expect(restricted.status).toBe(200);
+    const sent = await request('/api/v1/notifications', {method: 'POST', headers: authHeaders, body: JSON.stringify(payload)});
+    expect((await sent.json() as any).notification.total).toBe(0);
+  });
+
+  it('protects subscriber updates and rejects invalid or cross-tenant access without partial writes', async () => {
+    const session = await cookie();
+    await admin(session, '/settings', 'PUT', {paused: true, welcomeMessage: ''});
+    await request('/telegram/default/webhook', {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': 'test-webhook-secret'},
+      body: JSON.stringify({update_id: 710, message: {chat: {id: 444, type: 'private'}, text: '/start'}})
+    });
+    expect((await request('/api/admin/subscribers/444')).status).toBe(401);
+    expect((await request('/api/admin/subscribers/444', {method: 'PATCH', headers: {...authHeaders}, body: JSON.stringify({expectedVersion: 1, notes: 'No'})})).status).toBe(401);
+    expect((await request('/api/admin/subscribers/444', {method: 'PATCH', headers: {Cookie: session, Origin: 'https://evil.test', 'Content-Type': 'application/json'}, body: JSON.stringify({expectedVersion: 1, notes: 'No'})})).status).toBe(403);
+    await admin(session, '/tenants', 'POST', {id: 'other-team', name: 'Other team'});
+    await admin(session, '/tenants/other-team/applications', 'POST', {id: 'private-app', name: 'Private app'});
+    expect((await admin(session, '/tenants/other-team/subscribers/444')).status).toBe(404);
+    for (const patch of [
+      {notes: 'Missing version'}, {expectedVersion: 1, firstName: 'Overwritten'},
+      {expectedVersion: 1, accessMode: 'selected'}, {expectedVersion: 1, allowedApplicationIds: []},
+      {expectedVersion: 1, accessMode: 'all', allowedApplicationIds: ['test-integration']},
+      {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: ['private-app']},
+      {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: ['test-integration', 'test-integration']},
+    ]) {
+      const rejected = await admin(session, '/subscribers/444', 'PATCH', patch);
+      expect(rejected.status).toBe(400);
+      expect((await rejected.json() as any).error.code).toBe('INVALID_SUBSCRIBER');
+    }
+    expect((await (await admin(session, '/subscribers/444')).json() as any).subscriber).toMatchObject({version: 1, notes: '', accessMode: 'all'});
+    for (const path of ['/subscribers/invalid', '/subscribers?search=' + 'x'.repeat(101)]) expect((await admin(session, path)).status).toBe(400);
+    const missing = await admin(session, '/subscribers/999', 'PATCH', {expectedVersion: 1, notes: 'Missing'});
+    expect(missing.status).toBe(404);
+    expect((await missing.json() as any).error.code).toBe('SUBSCRIBER_NOT_FOUND');
+  });
+
+  it('creates application audiences atomically and preserves hidden applications for allowed deliveries', async () => {
+    const session = await cookie();
+    await admin(session, '/settings', 'PUT', {paused: true, welcomeMessage: ''});
+    for (const id of [551, 552]) await request('/telegram/default/webhook', {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': 'test-webhook-secret'},
+      body: JSON.stringify({update_id: id, message: {chat: {id, type: 'private'}, text: '/start'}})
+    });
+    const created = await admin(session, '/applications', 'POST', {id: 'private-release', name: 'Private release', audienceMode: 'selected', audienceChatIds: ['551'], showInDirectory: false});
+    expect(created.status).toBe(201);
+    const {application, apiKey} = await created.json() as any;
+    expect(application).toMatchObject({audienceMode: 'selected', audienceChatIds: ['551'], showInDirectory: false});
+    const send = async () => (await request('/api/v1/notifications', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-API-Key': apiKey}, body: JSON.stringify(payload)})).json() as Promise<any>;
+    expect((await send()).notification.total).toBe(1);
+    const updated = await admin(session, '/applications/private-release', 'PATCH', {expectedVersion: application.version, audienceMode: 'selected', audienceChatIds: []});
+    expect(updated.status).toBe(200);
+    expect((await send()).notification.total).toBe(0);
+    expect((await admin(session, '/applications', 'POST', {id: 'bad-audience', name: 'Bad audience', audienceMode: 'selected', audienceChatIds: ['99999']})).status).toBe(400);
+    const list = (await (await admin(session, '/applications')).json() as any).applications;
+    expect(list.some((item: any) => item.id === 'bad-audience')).toBe(false);
+  });
+
   it('routes Telegram application choices through the authenticated webhook before API fanout', async () => {
     const session = await cookie();
     expect((await admin(session, '/tenants/default/settings', 'PUT', {

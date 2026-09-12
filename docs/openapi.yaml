@@ -706,6 +706,114 @@ paths:
             maximum: 999999
             default: 1
           description: "One-based page; page size is fixed at 20."
+        -
+          name: "search"
+          in: "query"
+          description: "Trimmed subscriber search across Telegram first name, display-name override, username, and chat ID; at most 100 characters after trimming."
+          schema:
+            type: "string"
+            maxLength: 100
+  "/api/admin/subscribers/{chatId}":
+    parameters:
+      - name: "chatId"
+        in: "path"
+        required: true
+        description: "Telegram private-chat identifier of an existing subscriber."
+        schema:
+          type: "string"
+          pattern: "^-?[0-9]{1,20}$"
+    get:
+      operationId: "getSubscriber"
+      summary: "Read a subscriber profile and access policy"
+      description: "Returns private admin profile details for the default tenant, including notes, Telegram preferences, and the independent admin application-access policy."
+      tags: ["Administration"]
+      security:
+        - adminSession: []
+        - localAdminSession: []
+      responses:
+        "200":
+          description: "Subscriber profile."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubscriberDetail"
+        "400":
+          description: "INVALID_SUBSCRIBER: malformed chat ID."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "404":
+          description: "SUBSCRIBER_NOT_FOUND: subscriber does not exist in this tenant. Tenant-scoped routes can also return TENANT_NOT_FOUND."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+    patch:
+      operationId: "updateSubscriber"
+      summary: "Update a subscriber profile and allowed applications"
+      description: "Updates the default tenant subscriber using optimistic concurrency. Admin permissions intersect Telegram preferences; /all cannot bypass restrictions. An empty selected allowlist permits none. Profile/access changes do not reactivate, ban, unban, or rename a Telegram account. Omitted profile fields are preserved."
+      tags: ["Administration"]
+      security:
+        - adminSession: []
+        - localAdminSession: []
+      parameters:
+        - name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/SubscriberUpdate"
+      responses:
+        "200":
+          description: "Updated subscriber profile and version."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubscriberDetail"
+        "400":
+          description: "INVALID_SUBSCRIBER: invalid patch, chat ID, application ID, or application belonging to another tenant; includes missing expectedVersion and incomplete or inconsistent access fields."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "SUBSCRIBER_NOT_FOUND: subscriber does not exist in this tenant. Tenant-scoped routes can also return TENANT_NOT_FOUND."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "STALE_SUBSCRIBER: expectedVersion no longer matches. Read the profile again and resolve the edit against its current version."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
   "/api/admin/notifications":
     get:
       operationId: "listNotifications"
@@ -2129,6 +2237,121 @@ paths:
             maximum: 999999
             default: 1
           description: "One-based page; page size is fixed at 20."
+        -
+          name: "search"
+          in: "query"
+          description: "Trimmed subscriber search across Telegram first name, display-name override, username, and chat ID; at most 100 characters after trimming."
+          schema:
+            type: "string"
+            maxLength: 100
+  "/api/admin/tenants/{tenantId}/subscribers/{chatId}":
+    parameters:
+      - name: "tenantId"
+        in: "path"
+        required: true
+        schema:
+          type: "string"
+          pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
+        description: "Tenant ID. The default tenant is named default."
+      - name: "chatId"
+        in: "path"
+        required: true
+        description: "Telegram private-chat identifier of an existing subscriber."
+        schema:
+          type: "string"
+          pattern: "^-?[0-9]{1,20}$"
+    get:
+      operationId: "getSubscriberForTenant"
+      summary: "Read a subscriber profile and access policy"
+      description: "Returns private admin profile details for the selected tenant, including notes, Telegram preferences, and the independent admin application-access policy."
+      tags: ["Administration"]
+      security:
+        - adminSession: []
+        - localAdminSession: []
+      responses:
+        "200":
+          description: "Subscriber profile."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubscriberDetail"
+        "400":
+          description: "INVALID_SUBSCRIBER: malformed chat ID."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "404":
+          description: "SUBSCRIBER_NOT_FOUND: subscriber does not exist in this tenant. Tenant-scoped routes can also return TENANT_NOT_FOUND."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
+    patch:
+      operationId: "updateSubscriberForTenant"
+      summary: "Update a subscriber profile and allowed applications"
+      description: "Updates the selected tenant subscriber using optimistic concurrency. Admin permissions intersect Telegram preferences; /all cannot bypass restrictions. An empty selected allowlist permits none. Profile/access changes do not reactivate, ban, unban, or rename a Telegram account. Omitted profile fields are preserved."
+      tags: ["Administration"]
+      security:
+        - adminSession: []
+        - localAdminSession: []
+      parameters:
+        - name: "Origin"
+          in: "header"
+          required: true
+          description: "Must exactly equal this deployment's origin, including scheme and port."
+          schema:
+            type: "string"
+            format: "uri"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/SubscriberUpdate"
+      responses:
+        "200":
+          description: "Updated subscriber profile and version."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/SubscriberDetail"
+        "400":
+          description: "INVALID_SUBSCRIBER: invalid patch, chat ID, application ID, or application belonging to another tenant; includes missing expectedVersion and incomplete or inconsistent access fields."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          description: "SUBSCRIBER_NOT_FOUND: subscriber does not exist in this tenant. Tenant-scoped routes can also return TENANT_NOT_FOUND."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "409":
+          description: "STALE_SUBSCRIBER: expectedVersion no longer matches. Read the profile again and resolve the edit against its current version."
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Error"
+        "413":
+          "$ref": "#/components/responses/BodyTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/NotConfigured"
   "/api/admin/tenants/{tenantId}/notifications":
     get:
       operationId: "listNotificationsForTenant"
@@ -3577,14 +3800,112 @@ components:
           type: "string"
           enum:
             ["all","selected"]
+          description: "Subscriber-controlled Telegram preference. all means every application permitted by the admin access policy."
         applicationIds:
           type: "array"
+          description: "Telegram application preferences, independent of the admin allowedApplicationIds. Effective delivery requires both policies to permit the application."
           items:
             type: "string"
             maxLength: 48
+        displayName:
+          type:
+            ["string","null"]
+          maxLength: 80
+          description: "Admin display-name override. null uses the Telegram name; this never changes firstName, username, or chatId."
+        notes:
+          type: "string"
+          maxLength: 1000
+          description: "Private admin notes, not sent to Telegram subscribers."
+        accessMode:
+          type: "string"
+          enum:
+            ["all","selected"]
+          default: "all"
+          description: "Admin access policy. all permits current and future applications; selected permits only allowedApplicationIds. /all cannot bypass this policy."
+        allowedApplicationIds:
+          type: "array"
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: "string"
+            minLength: 2
+            maxLength: 48
+          description: "Admin-permitted applications. all requires an empty array; selected with an empty array permits none. Disabled applications can remain stored but cannot deliver."
+        version:
+          type: "integer"
+          minimum: 1
+          description: "Version for administrative profile/access edits. Supply this as expectedVersion when patching. Telegram identity and preference updates do not advance it."
       required:
-        ["chatId","firstName","username","active","joinedAt","updatedAt","banned","banReason","applicationMode","applicationIds"]
+        ["chatId","firstName","username","active","joinedAt","updatedAt","banned","banReason","applicationMode","applicationIds","displayName","notes","accessMode","allowedApplicationIds","version"]
       additionalProperties: false
+      description: "Admin-only subscriber profile. New and existing subscribers default to accessMode all. Profile/access edits preserve Telegram identity, user preferences, subscription activity, and ban state."
+    SubscriberDetail:
+      type: "object"
+      properties:
+        subscriber:
+          "$ref": "#/components/schemas/Subscriber"
+      required:
+        ["subscriber"]
+      additionalProperties: false
+    SubscriberUpdate:
+      type: "object"
+      properties:
+        expectedVersion:
+          type: "integer"
+          minimum: 1
+          description: "Required latest subscriber version. Read the subscriber again before resolving a stale-write conflict."
+        displayName:
+          type:
+            ["string","null"]
+          maxLength: 80
+          description: "Admin display-name override. Leading/trailing whitespace is trimmed; blank or null clears the override."
+        notes:
+          type: "string"
+          maxLength: 1000
+          description: "Private administrative notes, preserved as supplied; at most 1,000 characters."
+        accessMode:
+          type: "string"
+          enum:
+            ["all","selected"]
+        allowedApplicationIds:
+          type: "array"
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: "string"
+            minLength: 2
+            maxLength: 48
+            pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
+          description: "Unique application IDs belonging to this tenant. Existing disabled applications may be stored but cannot deliver. selected with [] explicitly denies all applications."
+      required:
+        ["expectedVersion"]
+      dependentRequired:
+        accessMode:
+          ["allowedApplicationIds"]
+        allowedApplicationIds:
+          ["accessMode"]
+      allOf:
+        -
+          if:
+            required:
+              ["accessMode"]
+            properties:
+              accessMode:
+                const: "all"
+          then:
+            properties:
+              allowedApplicationIds:
+                maxItems: 0
+      additionalProperties: false
+      description: "Partial admin profile/access update; omitted profile fields retain their values. accessMode and allowedApplicationIds must be supplied together; all requires []. This policy intersects the subscriber's Telegram preferences. The request cannot change Telegram identity, preference fields, active status, or bans; use the existing ban endpoint for bans."
+      examples:
+        -
+          expectedVersion: 1
+          displayName: "On-call engineer"
+          notes: "Receives production payment alerts."
+          accessMode: "selected"
+          allowedApplicationIds:
+            ["payments-api"]
     SubscriberPage:
       type: "object"
       properties:
@@ -4148,8 +4469,17 @@ components:
           type: "boolean"
         keyConfigured:
           type: "boolean"
+        audienceMode:
+          type: "string"
+          enum: ["all","selected"]
+          description: "Application audience. all permits current and future subscribers; selected permits only audienceChatIds. The subscriber admin access policy and Telegram preferences must also allow delivery."
+        audienceChatIds:
+          "$ref": "#/components/schemas/ApplicationAudienceChatIds"
+        showInDirectory:
+          type: "boolean"
+          description: "Whether eligible subscribers can see this application in /apps. Hiding it does not itself block otherwise-authorized delivery."
       required:
-        ["id","name","enabled","createdAt","updatedAt","version","isLegacy","keyConfigured"]
+        ["id","name","enabled","createdAt","updatedAt","version","isLegacy","keyConfigured","audienceMode","audienceChatIds","showInDirectory"]
       additionalProperties: false
     ApplicationCreate:
       type: "object"
@@ -4161,9 +4491,31 @@ components:
           type: "string"
           minLength: 1
           maxLength: 80
+        audienceMode:
+          type: "string"
+          enum: ["all","selected"]
+          default: "all"
+          description: "Application audience. all permits current and future subscribers; selected permits only audienceChatIds. The subscriber admin access policy and Telegram preferences must also allow delivery."
+        audienceChatIds:
+          "$ref": "#/components/schemas/ApplicationAudienceChatIds"
+          default: []
+        showInDirectory:
+          type: "boolean"
+          default: true
+          description: "Whether eligible subscribers can see this application in /apps. Hiding it does not itself block otherwise-authorized delivery."
       required:
         ["id","name"]
+      allOf:
+        - if:
+            properties:
+              audienceMode:
+                const: "all"
+          then:
+            properties:
+              audienceChatIds:
+                maxItems: 0
       additionalProperties: false
+      description: "Creates an enabled application and returns its new key once. Audience defaults to all with an empty ID list; directory visibility defaults to true. selected with [] permits no subscribers. Every selected chat ID must already exist in this tenant or INVALID_APPLICATION (400) is returned before creation."
     ApplicationUpdate:
       type: "object"
       properties:
@@ -4177,9 +4529,39 @@ components:
           type: "integer"
           minimum: 1
           description: "Version last observed by the client; stale writes return 409."
+        audienceMode:
+          type: "string"
+          enum: ["all","selected"]
+          description: "Application audience. all permits current and future subscribers; selected permits only audienceChatIds. The subscriber admin access policy and Telegram preferences must also allow delivery."
+        audienceChatIds:
+          "$ref": "#/components/schemas/ApplicationAudienceChatIds"
+        showInDirectory:
+          type: "boolean"
+          description: "Whether eligible subscribers can see this application in /apps. Hiding it does not itself block otherwise-authorized delivery."
       required:
         []
+      dependentRequired:
+        audienceMode: ["audienceChatIds"]
+        audienceChatIds: ["audienceMode"]
+      allOf:
+        - if:
+            properties:
+              audienceMode:
+                const: "all"
+          then:
+            properties:
+              audienceChatIds:
+                maxItems: 0
       additionalProperties: false
+      description: "Partial application update. Send audienceMode and audienceChatIds together; all requires [] and includes future subscribers, while selected with [] denies everyone. Selected IDs are checked in this tenant before saving. Invalid audiences return INVALID_APPLICATION (400). Concurrent changes during audience validation return STALE_APPLICATION (409), even when expectedVersion was omitted. Key rotation preserves audience and directory settings."
+    ApplicationAudienceChatIds:
+      type: "array"
+      maxItems: 1000
+      uniqueItems: true
+      items:
+        type: "string"
+        pattern: "^(?:0|-?[1-9][0-9]{0,19})$"
+      description: "Up to 1,000 unique canonical decimal Telegram chat IDs belonging to existing subscribers in this tenant. No leading zeros, plus signs, or negative zero. all requires []; selected with [] denies all subscribers."
     ApplicationKeyResult:
       type: "object"
       properties:

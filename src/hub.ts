@@ -1,5 +1,6 @@
 import {DurableObject} from 'cloudflare:workers';
 import type {
+  Application,
   Env,
   NotificationInput,
   NotificationRecord,
@@ -8,14 +9,15 @@ import type {
   Settings,
   SourceContext,
   Subscriber,
+  SubscriberUpdate,
   TenantRuntime,
-  TenantUsage,
-  Application
+  TenantUsage
 } from './types';
 import {AppError, DEFAULT_SETTINGS, LEVELS} from './types';
 import {formatNotification, formatRichNotification, telegramCall, TelegramError} from './telegram';
 
 type Row = Record<string, SqlStorageValue>;
+type DirectoryApplication = Pick<Application, 'id' | 'name'>;
 
 interface NotificationRow extends Row {
   id: string;
@@ -66,7 +68,10 @@ export class NotificationHub extends DurableObject<Env> {
   private lastCleanupAt = -Infinity;
   private wakeEpoch = 0;
   private readonly readCache = new Map<string, { expiresAt: number; value: unknown }>();
-  private readonly rateCounters = new Map<string, {count: number; expiresAt: number}>();
+  private readonly rateCounters = new Map<string, { count: number; expiresAt: number }>();
+  private readonly applicationVersions = new Map<string, number>();
+  private applicationDirectoryVersion = 0;
+  private applicationRevision = '';
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -221,8 +226,30 @@ export class NotificationHub extends DurableObject<Env> {
           );
       `);
       this.sql.exec(`
-        CREATE TABLE IF NOT EXISTS tenant_identity (id INTEGER PRIMARY KEY CHECK(id = 1), tenant_id TEXT);
-        CREATE TABLE IF NOT EXISTS daily_usage (day TEXT PRIMARY KEY, notifications INTEGER NOT NULL DEFAULT 0);
+          CREATE TABLE IF NOT EXISTS tenant_identity
+          (
+              id
+              INTEGER
+              PRIMARY
+              KEY
+              CHECK
+          (
+              id =
+              1
+          ), tenant_id TEXT);
+          CREATE TABLE IF NOT EXISTS daily_usage
+          (
+              day
+              TEXT
+              PRIMARY
+              KEY,
+              notifications
+              INTEGER
+              NOT
+              NULL
+              DEFAULT
+              0
+          );
       `);
       this.sql.exec('INSERT OR IGNORE INTO tenant_identity (id, tenant_id) VALUES (1, ?)', legacyDatabase ? 'default' : null);
       const storedTenant = this.rows('SELECT tenant_id FROM tenant_identity WHERE id = 1')[0].tenant_id;
@@ -235,6 +262,37 @@ export class NotificationHub extends DurableObject<Env> {
       if (!subscriberColumns.some((column) => column.name === 'banned')) this.sql.exec('ALTER TABLE subscribers ADD COLUMN banned INTEGER NOT NULL DEFAULT 0');
       if (!subscriberColumns.some((column) => column.name === 'ban_reason')) this.sql.exec('ALTER TABLE subscribers ADD COLUMN ban_reason TEXT');
       if (!subscriberColumns.some((column) => column.name === 'application_mode')) this.sql.exec("ALTER TABLE subscribers ADD COLUMN application_mode TEXT NOT NULL DEFAULT 'all'");
+      if (!subscriberColumns.some((column) => column.name === 'display_name')) this.sql.exec('ALTER TABLE subscribers ADD COLUMN display_name TEXT');
+      if (!subscriberColumns.some((column) => column.name === 'notes')) this.sql.exec("ALTER TABLE subscribers ADD COLUMN notes TEXT NOT NULL DEFAULT ''");
+      if (!subscriberColumns.some((column) => column.name === 'access_mode')) this.sql.exec("ALTER TABLE subscribers ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'all'");
+      if (!subscriberColumns.some((column) => column.name === 'version')) this.sql.exec('ALTER TABLE subscribers ADD COLUMN version INTEGER NOT NULL DEFAULT 1');
+      this.sql.exec(`CREATE TABLE IF NOT EXISTS subscriber_allowed_applications
+      (
+          chat_id
+          TEXT
+          NOT
+          NULL
+          REFERENCES
+          subscribers
+                     (
+          chat_id
+                     ) ON DELETE CASCADE,
+          application_id TEXT NOT NULL, PRIMARY KEY
+                     (
+                         chat_id,
+                         application_id
+                     )
+          )`);
+      this.sql.exec(`CREATE TABLE IF NOT EXISTS application_access (
+        application_id TEXT PRIMARY KEY, version INTEGER NOT NULL, enabled INTEGER NOT NULL,
+        audience_mode TEXT NOT NULL, show_in_directory INTEGER NOT NULL, name TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS application_audience (
+        application_id TEXT NOT NULL, chat_id TEXT NOT NULL, PRIMARY KEY(application_id, chat_id)
+      )`);
+      for (const app of this.rows('SELECT application_id, version FROM application_access')) this.applicationVersions.set(String(app.application_id), Number(app.version));
+      this.applicationRevision = [...this.applicationVersions].map(([id, version]) => `${id}:${version}`).sort().join(',');
+      this.applicationDirectoryVersion = Number(this.rows("SELECT value FROM queue_state WHERE key = 'application_directory_version'")[0]?.value ?? 0);
       if (!this.rows('PRAGMA table_info(deliveries)').some((column) => column.name === 'system_payload')) this.sql.exec('ALTER TABLE deliveries ADD COLUMN system_payload TEXT');
       this.sql.exec(`CREATE TABLE IF NOT EXISTS subscriber_applications
       (
@@ -255,7 +313,7 @@ export class NotificationHub extends DurableObject<Env> {
           )`);
       this.sql.exec('CREATE INDEX IF NOT EXISTS notifications_visible_created ON notifications(purging, created_at DESC)');
       this.sql.exec('INSERT OR IGNORE INTO settings (id, body) VALUES (1, ?)', JSON.stringify(DEFAULT_SETTINGS));
-      this.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(String(this.rows('SELECT body FROM settings WHERE id = 1')[0].body)) };
+      this.settings = {...DEFAULT_SETTINGS, ...JSON.parse(String(this.rows('SELECT body FROM settings WHERE id = 1')[0].body))};
       this.lastCleanupAt = Number(this.rows("SELECT value FROM queue_state WHERE key = 'last_cleanup_at'")[0]?.value ?? -Infinity);
       const today = new Date(Date.now()).toISOString().slice(0, 10);
       this.sql.exec('INSERT OR IGNORE INTO daily_usage (day, notifications) SELECT ?, COUNT(*) FROM notifications WHERE created_at >= ?', today, Date.parse(`${today}T00:00:00.000Z`));
@@ -282,11 +340,13 @@ export class NotificationHub extends DurableObject<Env> {
     this.readCache.delete(key);
     const value = read();
     if (this.readCache.size >= CACHE_ENTRIES) this.readCache.delete(this.readCache.keys().next().value!);
-    this.readCache.set(key, { expiresAt: Date.now() + CACHE_TTL, value });
+    this.readCache.set(key, {expiresAt: Date.now() + CACHE_TTL, value});
     return structuredClone(value);
   }
 
-  private invalidate(): void { this.readCache.clear(); }
+  private invalidate(): void {
+    this.readCache.clear();
+  }
 
   async initializeTenant(id: string, name?: string): Promise<void> {
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) throw new AppError(400, 'TENANT_DISABLED', 'TENANT_DISABLED: Invalid tenant identity.');
@@ -297,7 +357,7 @@ export class NotificationHub extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.sql.exec('UPDATE tenant_identity SET tenant_id = ? WHERE id = 1', id);
       if (name) {
-        this.settings = { ...this.settings, projectName: name.slice(0, 80) };
+        this.settings = {...this.settings, projectName: name.slice(0, 80)};
         this.sql.exec('UPDATE settings SET body = ? WHERE id = 1', JSON.stringify(this.settings));
       }
     });
@@ -313,9 +373,68 @@ export class NotificationHub extends DurableObject<Env> {
 
   private async runtime(): Promise<TenantRuntime> {
     if (!this.tenantId || !this.env.TENANTS) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: Tenant is unavailable.');
-    const runtime = await this.env.TENANTS.getByName('registry').getRuntime(this.tenantId);
+    const knownRevision = this.applicationRevision;
+    const runtime = await this.env.TENANTS.getByName('registry').getRuntime(this.tenantId, knownRevision);
     if (!runtime || runtime.id !== this.tenantId) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: Tenant is unavailable.');
+    if (runtime.applications) this.refreshApplicationAccess(runtime.applications);
+    else if (runtime.applicationRevision !== knownRevision) throw new AppError(503, 'TENANT_DISABLED', 'TENANT_DISABLED: Application policy snapshot is unavailable.');
     return runtime;
+  }
+
+  validateApplicationAudience(chatIds: string[]): void {
+    if (!Array.isArray(chatIds) || chatIds.length > 1_000 || chatIds.some((id) => typeof id !== 'string' || !/^-?\d{1,20}$/.test(id)) || new Set(chatIds).size !== chatIds.length) {
+      throw new AppError(400, 'INVALID_APPLICATION', 'INVALID_APPLICATION: Invalid application audience.');
+    }
+    if (chatIds.length && this.count('SELECT COUNT(*) AS count FROM subscribers WHERE chat_id IN (SELECT value FROM json_each(?))', JSON.stringify(chatIds)) !== chatIds.length) {
+      throw new AppError(400, 'INVALID_APPLICATION', 'INVALID_APPLICATION: Application audience contains an unknown subscriber.');
+    }
+  }
+
+  /** Registry calls this directly while mutating applications: never call back into the registry. */
+  refreshApplicationAccess(applications: Application[]): void {
+    const changed: Application[] = [];
+    this.ctx.storage.transactionSync(() => {
+      for (const app of applications) {
+        const version = this.applicationVersions.get(app.id);
+        if (typeof version === 'number' && version >= app.version) continue;
+        this.sql.exec(`INSERT INTO application_access (application_id, version, enabled, audience_mode,
+                                                       show_in_directory, name)
+                       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(application_id) DO
+                UPDATE SET version = excluded.version, enabled = excluded.enabled,
+                    audience_mode = excluded.audience_mode, show_in_directory = excluded.show_in_directory, name = excluded.name`,
+          app.id, app.version, app.enabled ? 1 : 0, app.audienceMode, app.showInDirectory ? 1 : 0, app.name);
+        this.sql.exec('DELETE FROM application_audience WHERE application_id = ?', app.id);
+        if (app.audienceMode === 'selected') {
+          this.sql.exec('INSERT INTO application_audience (application_id, chat_id) SELECT ?, value FROM json_each(?)', app.id, JSON.stringify(app.audienceChatIds));
+        }
+        changed.push(app);
+      }
+      if (!changed.length) return;
+      this.sql.exec("INSERT INTO queue_state (key, value) VALUES ('application_directory_version', 1) ON CONFLICT(key) DO UPDATE SET value = value + 1");
+      this.sql.exec(`UPDATE deliveries
+                     SET status     = 'skipped',
+                         error      = 'Application access or directory changed.',
+                         updated_at = ?
+                     WHERE status = 'pending'
+                       AND ((notification_id IS NULL AND system_payload IS NOT NULL) OR
+                            notification_id IN (SELECT n.id
+                                                FROM notifications n
+                                                WHERE json_extract(n.input, '$.applicationId') IS NOT NULL
+                                                  AND NOT EXISTS (SELECT 1
+                                                                  FROM application_access a
+                                                                  WHERE a.application_id = json_extract(n.input, '$.applicationId')
+                                                                    AND a.enabled = 1
+                                                                    AND (a.audience_mode = 'all' OR EXISTS (SELECT 1
+                                                                                                            FROM application_audience p
+                                                                                                            WHERE p.application_id = a.application_id
+                                                                                                              AND p.chat_id = deliveries.chat_id)))))`, Date.now());
+    });
+    if (changed.length) {
+      for (const app of changed) this.applicationVersions.set(app.id, app.version);
+      this.applicationRevision = [...this.applicationVersions].map(([id, version]) => `${id}:${version}`).sort().join(',');
+      this.applicationDirectoryVersion++;
+      this.invalidate();
+    }
   }
 
   getUsage(): TenantUsage {
@@ -333,7 +452,7 @@ export class NotificationHub extends DurableObject<Env> {
     return structuredClone(this.settings);
   }
 
-  setSubscriberBan(chatIds: string[], banned: boolean, reason?: string): {updated: number} {
+  setSubscriberBan(chatIds: string[], banned: boolean, reason?: string): { updated: number } {
     if (!Array.isArray(chatIds) || chatIds.length < 1 || chatIds.length > 100 || chatIds.some((id) => typeof id !== 'string' || !/^-?\d{1,20}$/.test(id)) || typeof banned !== 'boolean') {
       throw new AppError(400, 'INVALID_BAN', 'Select between 1 and 100 valid subscriber IDs.');
     }
@@ -384,7 +503,7 @@ export class NotificationHub extends DurableObject<Env> {
     return true;
   }
 
-  private cacheRateCounter(key: string, counter: {count: number; expiresAt: number}): void {
+  private cacheRateCounter(key: string, counter: { count: number; expiresAt: number }): void {
     if (!this.rateCounters.has(key) && this.rateCounters.size >= 256) this.rateCounters.delete(this.rateCounters.keys().next().value!);
     this.rateCounters.set(key, counter);
   }
@@ -413,24 +532,30 @@ export class NotificationHub extends DurableObject<Env> {
       const settings = this.getSettings();
       const rendered = formatNotification(input, source, settings.showCountryFlag);
       if (rendered.length > 4_000) return {error: new AppError(400, 'MESSAGE_TOO_LONG', 'The formatted notification must contain at most 4000 characters.')};
-      const richPayload = JSON.stringify({method: 'sendRichMessage', rich_message: formatRichNotification(input, source, settings.showCountryFlag, id)});
+      const richPayload = JSON.stringify({
+        method: 'sendRichMessage',
+        rich_message: formatRichNotification(input, source, settings.showCountryFlag, id)
+      });
       const day = new Date(now).toISOString().slice(0, 10);
       const used = Number(this.rows('SELECT notifications FROM daily_usage WHERE day = ?', day)[0]?.notifications ?? 0);
-      if (used >= runtime.limits.notificationsPerDay) return { error: new AppError(429, 'DAILY_LIMIT', 'DAILY_LIMIT: The daily notification quota has been reached.') };
-      const recipients = this.count(`SELECT COUNT(*) AS count FROM subscribers s WHERE active = 1 AND banned = 0 AND (
-        application_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_applications p WHERE p.chat_id = s.chat_id AND p.application_id = ?)
-      )`, input.applicationId ?? null);
+      if (used >= runtime.limits.notificationsPerDay) return {error: new AppError(429, 'DAILY_LIMIT', 'DAILY_LIMIT: The daily notification quota has been reached.')};
+      const recipients = this.count(`WITH request AS (SELECT ? AS app_id)
+                                     SELECT COUNT(*) AS count
+                                     FROM subscribers s CROSS JOIN request r
+                                     WHERE ${this.recipientWhere('r.app_id')}`, input.applicationId ?? null);
       const pending = this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending', 'sending')");
-      if (pending + recipients > runtime.limits.maxPendingDeliveries) return { error: new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is not enough capacity for this notification in the delivery queue.') };
+      if (pending + recipients > runtime.limits.maxPendingDeliveries) return {error: new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is not enough capacity for this notification in the delivery queue.')};
       this.sql.exec('INSERT INTO daily_usage (day, notifications) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET notifications = notifications + 1', day);
       this.sql.exec('INSERT INTO notifications (id, input, source, created_at, idempotency_key, fingerprint) VALUES (?, ?, ?, ?, ?, ?)', id, JSON.stringify(input), JSON.stringify(source), now, idempotencyKey ?? null, fingerprint);
       // INSERT SELECT gives the notification one atomic snapshot of active subscribers.
-      this.sql.exec(`INSERT INTO deliveries (notification_id, chat_id, rendered, image, silent, updated_at, system_payload)
-                     SELECT ?, chat_id, ?, ?, ?, ?, ?
-                     FROM subscribers s
-                     WHERE active = 1 AND banned = 0 AND (application_mode = 'all' OR EXISTS (
-                       SELECT 1 FROM subscriber_applications p WHERE p.chat_id = s.chat_id AND p.application_id = ?
-                     ))`, id, rendered, input.image ?? null, input.silent ? 1 : 0, now, richPayload, input.applicationId ?? null);
+      this.sql.exec(`WITH request AS (SELECT ? AS app_id)
+                     INSERT
+                     INTO deliveries (notification_id, chat_id, rendered, image, silent, updated_at, system_payload)
+      SELECT ?, chat_id, ?, ?, ?, ?, ?
+      FROM subscribers s
+               CROSS JOIN request r
+      WHERE ${this.recipientWhere('r.app_id')}`,
+        input.applicationId ?? null, id, rendered, input.image ?? null, input.silent ? 1 : 0, now, richPayload);
       this.invalidate();
       return {
         notification: this.toNotification(this.rows<NotificationRow>('SELECT * FROM notifications WHERE id = ?', id)[0]),
@@ -535,27 +660,131 @@ export class NotificationHub extends DurableObject<Env> {
     };
   }
 
-  listSubscribers(page: number): Page<Subscriber> {
-    return this.cached(`subscribers:${page}`, () => this.readSubscribers(page));
+  listSubscribers(page: number, search = ''): Page<Subscriber> {
+    if (typeof search !== 'string' || search.trim().length > 100) throw new AppError(400, 'INVALID_SUBSCRIBER', 'INVALID_SUBSCRIBER: Search must contain at most 100 characters.');
+    page = Math.max(1, Math.floor(page || 1));
+    search = search.trim();
+    return this.cached(`subscribers:${JSON.stringify([page, search])}`, () => {
+      const where = search ? ' WHERE instr(lower(first_name), lower(?)) > 0 OR instr(lower(display_name), lower(?)) > 0 OR instr(lower(username), lower(?)) > 0 OR instr(chat_id, ?) > 0' : '';
+      const bindings = search ? [search, search, search, search] : [];
+      return {
+        items: this.toSubscribers(this.rows(`SELECT * FROM subscribers${where} ORDER BY joined_at DESC, chat_id LIMIT ? OFFSET ?`, ...bindings, PAGE_SIZE, (page - 1) * PAGE_SIZE)),
+        total: this.count(`SELECT COUNT(*) AS count FROM subscribers${where}`, ...bindings), page, pageSize: PAGE_SIZE,
+      };
+    });
   }
 
-  private readSubscribers(page: number): Page<Subscriber> {
-    page = Math.max(1, Math.floor(page || 1));
-    return {
-      items: this.rows('SELECT * FROM subscribers ORDER BY joined_at DESC, chat_id LIMIT ? OFFSET ?', PAGE_SIZE, (page - 1) * PAGE_SIZE).map((row) => ({
-        chatId: String(row.chat_id),
-        firstName: String(row.first_name),
-        username: row.username === null ? null : String(row.username),
-        active: row.active === 1,
-        banned: row.banned === 1,
-        banReason: row.ban_reason === null ? null : String(row.ban_reason),
-        applicationMode: row.application_mode === 'selected' ? 'selected' as const : 'all' as const,
-        applicationIds: this.rows('SELECT application_id FROM subscriber_applications WHERE chat_id = ? ORDER BY application_id', row.chat_id).map((entry) => String(entry.application_id)),
-        joinedAt: new Date(Number(row.joined_at)).toISOString(),
-        updatedAt: new Date(Number(row.updated_at)).toISOString()
-      })),
-      total: this.count('SELECT COUNT(*) AS count FROM subscribers'), page, pageSize: PAGE_SIZE,
+  getSubscriber(chatId: string): Subscriber | null {
+    this.validateSubscriberId(chatId);
+    return this.cached(`subscriber:${chatId}`, () => this.toSubscribers(this.rows('SELECT * FROM subscribers WHERE chat_id = ?', chatId))[0] ?? null);
+  }
+
+  private validateSubscriberId(chatId: string): void {
+    if (typeof chatId !== 'string' || !/^-?\d{1,20}$/.test(chatId)) throw new AppError(400, 'INVALID_SUBSCRIBER', 'INVALID_SUBSCRIBER: Invalid subscriber identifier.');
+  }
+
+  /** Fetch each relation once for the complete page, including administrative and Telegram selections. */
+  private toSubscribers(rows: Row[]): Subscriber[] {
+    if (!rows.length) return [];
+    const ids = rows.map((row) => row.chat_id);
+    const placeholders = ids.map(() => '?').join(',');
+    const relations = (table: string): Map<string, string[]> => {
+      const result = new Map<string, string[]>();
+      for (const row of this.rows(`SELECT chat_id, application_id FROM ${table} WHERE chat_id IN (${placeholders}) ORDER BY application_id`, ...ids)) {
+        const chatId = String(row.chat_id);
+        const values = result.get(chatId) ?? [];
+        values.push(String(row.application_id));
+        result.set(chatId, values);
+      }
+      return result;
     };
+    const preferences = relations('subscriber_applications');
+    const allowed = relations('subscriber_allowed_applications');
+    return rows.map((row) => ({
+      chatId: String(row.chat_id),
+      firstName: String(row.first_name),
+      username: row.username === null ? null : String(row.username),
+      active: row.active === 1,
+      banned: row.banned === 1,
+      banReason: row.ban_reason === null ? null : String(row.ban_reason),
+      displayName: row.display_name === null ? null : String(row.display_name),
+      notes: String(row.notes),
+      accessMode: row.access_mode === 'selected' ? 'selected' : 'all',
+      allowedApplicationIds: allowed.get(String(row.chat_id)) ?? [],
+      version: Number(row.version),
+      applicationMode: row.application_mode === 'selected' ? 'selected' : 'all',
+      applicationIds: preferences.get(String(row.chat_id)) ?? [],
+      joinedAt: new Date(Number(row.joined_at)).toISOString(),
+      updatedAt: new Date(Number(row.updated_at)).toISOString(),
+    }));
+  }
+
+  async updateSubscriber(chatId: string, patch: SubscriberUpdate): Promise<Subscriber> {
+    this.validateSubscriberId(chatId);
+    const invalid = (): never => {
+      throw new AppError(400, 'INVALID_SUBSCRIBER', 'INVALID_SUBSCRIBER: Invalid subscriber profile or application access policy.');
+    };
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) invalid();
+    const keys = Object.keys(patch);
+    if (keys.some((key) => !['expectedVersion', 'displayName', 'notes', 'accessMode', 'allowedApplicationIds'].includes(key)) ||
+      !Number.isSafeInteger(patch.expectedVersion) || patch.expectedVersion < 1 || keys.length < 2) invalid();
+    const has = (key: string) => Object.prototype.hasOwnProperty.call(patch, key);
+    if (has('displayName') && patch.displayName !== null && (typeof patch.displayName !== 'string' || patch.displayName.trim().length > 80)) invalid();
+    if (has('notes') && (typeof patch.notes !== 'string' || patch.notes.length > 1_000)) invalid();
+    const policyChanged = has('accessMode');
+    if (policyChanged !== has('allowedApplicationIds')) invalid();
+    if (policyChanged) {
+      if (!['all', 'selected'].includes(patch.accessMode!) || !Array.isArray(patch.allowedApplicationIds) || patch.allowedApplicationIds.length > 100 ||
+        patch.allowedApplicationIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$/.test(id)) ||
+        new Set(patch.allowedApplicationIds).size !== patch.allowedApplicationIds.length ||
+        (patch.accessMode === 'all' && patch.allowedApplicationIds.length > 0)) invalid();
+    }
+    if (!this.rows('SELECT chat_id FROM subscribers WHERE chat_id = ?', chatId).length) throw new AppError(404, 'SUBSCRIBER_NOT_FOUND', 'SUBSCRIBER_NOT_FOUND: Subscriber does not exist.');
+    if (policyChanged && patch.allowedApplicationIds!.length) {
+      await this.runtime();
+      if (patch.allowedApplicationIds!.some((id) => !this.applicationVersions.has(id))) invalid();
+    }
+    this.ctx.storage.transactionSync(() => {
+      const current = this.rows('SELECT version FROM subscribers WHERE chat_id = ?', chatId)[0];
+      if (!current) throw new AppError(404, 'SUBSCRIBER_NOT_FOUND', 'SUBSCRIBER_NOT_FOUND: Subscriber does not exist.');
+      if (current.version !== patch.expectedVersion) throw new AppError(409, 'STALE_SUBSCRIBER', 'STALE_SUBSCRIBER: Subscriber was changed; reload it before saving.');
+      const columns = ['version = version + 1', 'updated_at = ?'];
+      const bindings: SqlStorageValue[] = [Date.now()];
+      if (has('displayName')) {
+        columns.push('display_name = ?');
+        bindings.push(patch.displayName?.trim() || null);
+      }
+      if (has('notes')) {
+        columns.push('notes = ?');
+        bindings.push(patch.notes!);
+      }
+      if (policyChanged) {
+        columns.push('access_mode = ?');
+        bindings.push(patch.accessMode!);
+        this.sql.exec('DELETE FROM subscriber_allowed_applications WHERE chat_id = ?', chatId);
+        for (const id of patch.allowedApplicationIds!) this.sql.exec('INSERT INTO subscriber_allowed_applications (chat_id, application_id) VALUES (?, ?)', chatId, id);
+      }
+      this.sql.exec(`UPDATE subscribers SET ${columns.join(', ')} WHERE chat_id = ?`, ...bindings, chatId);
+      if (policyChanged) {
+        this.sql.exec(`UPDATE deliveries
+                       SET status     = 'skipped',
+                           error      = 'Subscriber application access policy changed.',
+                           updated_at = ?
+                       WHERE chat_id = ?
+                         AND status = 'pending'
+                         AND (
+                           (notification_id IS NULL AND system_payload IS NOT NULL) OR
+                           (? = 'selected' AND notification_id IN (SELECT n.id
+                                                                   FROM notifications n
+                                                                   WHERE NOT EXISTS (SELECT 1
+                                                                                     FROM subscriber_allowed_applications a
+                                                                                     WHERE a.chat_id = ?
+                                                                                       AND a.application_id = json_extract(n.input, '$.applicationId'))))
+                           )`, Date.now(), chatId, patch.accessMode!, chatId);
+      }
+    });
+    this.invalidate();
+    return this.getSubscriber(chatId)!;
   }
 
   getOverview(): Overview {
@@ -613,18 +842,13 @@ export class NotificationHub extends DurableObject<Env> {
     if (!Number.isSafeInteger(value.update_id)) return;
     const runtime = await this.runtime();
     const callback = value.callback_query as {
-      id?: unknown; data?: unknown; from?: {id?: unknown};
-      message?: {message_id?: unknown; chat?: {id?: unknown; type?: string}};
+      id?: unknown; data?: unknown; from?: { id?: unknown };
+      message?: { message_id?: unknown; chat?: { id?: unknown; type?: string } };
     } | undefined;
     const ownsCallback = callback?.message?.chat?.type === 'private' &&
       Number.isSafeInteger(callback.message.chat.id) && callback.from?.id === callback.message.chat.id &&
       Number.isSafeInteger(callback.message.message_id) && Number(callback.message.message_id) > 0 &&
       typeof callback.id === 'string' && callback.id.length <= 256 && typeof callback.data === 'string';
-    const messageText = (value.message as {text?: unknown} | undefined)?.text;
-    const preferencesCommand = typeof messageText === 'string' && /^\/(apps|all)(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(messageText);
-    const applications = runtime.enabled && (ownsCallback || preferencesCommand)
-      ? (await this.env.TENANTS.getByName('registry').listApplications(runtime.id)).filter((app) => app.enabled)
-      : [];
     let acknowledge = false;
     let acknowledgement = 'تنظیمات دریافت اعلان ذخیره شد.';
     const outcome = await this.ctx.storage.transaction(async () => {
@@ -639,17 +863,18 @@ export class NotificationHub extends DurableObject<Env> {
         const chatId = String(callback.message!.chat!.id);
         const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
         if (!subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
+        const visibleApplications = this.allowedApplications(chatId);
         const appId = /^apps:toggle:([a-z0-9][a-z0-9_-]{0,63})$/.exec(String(callback.data))?.[1];
         const pageMatch = /^apps:page:(\d{1,3})$/.exec(String(callback.data));
-        const page = pageMatch ? Number(pageMatch[1]) : appId ? Math.floor(applications.findIndex((app) => app.id === appId) / 20) : 0;
+        const page = pageMatch ? Number(pageMatch[1]) : appId ? Math.floor(visibleApplications.findIndex((app) => app.id === appId) / 20) : 0;
         if (pageMatch) {
-          if (page >= Math.max(1, Math.ceil(applications.length / 20))) return;
+          if (page >= Math.max(1, Math.ceil(visibleApplications.length / 20))) return;
           acknowledgement = 'فهرست اپلیکیشن‌ها به‌روز شد.';
         } else {
-          if (callback.data !== 'apps:all' && (!appId || !applications.some((app) => app.id === appId))) return;
+          if (callback.data !== 'apps:all' && (!appId || !visibleApplications.some((app) => app.id === appId))) return;
           this.changeApplications(chatId, appId ?? null);
         }
-        this.queueApplicationPrompt(chatId, applications, runtime, Number(callback.message!.message_id), page);
+        this.queueApplicationPrompt(chatId, visibleApplications, runtime, Number(callback.message!.message_id), page);
         acknowledge = true;
         return;
       }
@@ -688,7 +913,7 @@ export class NotificationHub extends DurableObject<Env> {
           const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
           if (!runtime.enabled || !subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
           if (command === 'all') this.changeApplications(chatId, null);
-          if (!this.queueApplicationPrompt(chatId, applications, runtime)) return new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is no capacity for the application preferences menu.');
+          if (!this.queueApplicationPrompt(chatId, this.allowedApplications(chatId), runtime)) return new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is no capacity for the application preferences menu.');
         }
       }
       const membership = value.my_chat_member as {
@@ -702,8 +927,13 @@ export class NotificationHub extends DurableObject<Env> {
     this.cleanup();
     if (acknowledge && runtime.botToken) {
       // Acknowledging a button does not send another message or change delivery outcomes.
-      try { await telegramCall(runtime.botToken, 'answerCallbackQuery', {callback_query_id: callback!.id, text: acknowledgement}); }
-      catch { /* Preferences remain durable even when Telegram cannot dismiss its spinner. */ }
+      try {
+        await telegramCall(runtime.botToken, 'answerCallbackQuery', {
+          callback_query_id: callback!.id,
+          text: acknowledgement
+        });
+      } catch { /* Preferences remain durable even when Telegram cannot dismiss its spinner. */
+      }
     }
     if (outcome) throw outcome;
   }
@@ -721,35 +951,101 @@ export class NotificationHub extends DurableObject<Env> {
       else this.sql.exec('INSERT INTO subscriber_applications (chat_id, application_id) VALUES (?, ?)', chatId, applicationId);
       const count = this.count('SELECT COUNT(*) AS count FROM subscriber_applications WHERE chat_id = ?', chatId);
       this.sql.exec('UPDATE subscribers SET application_mode = ?, updated_at = ? WHERE chat_id = ?', count ? 'selected' : 'all', Date.now(), chatId);
-      if (count) this.sql.exec(`UPDATE deliveries SET status = 'skipped', error = 'Subscriber excluded this application.', updated_at = ?
-        WHERE chat_id = ? AND status = 'pending' AND notification_id IN (
-          SELECT n.id FROM notifications n WHERE NOT EXISTS (
-            SELECT 1 FROM subscriber_applications p WHERE p.chat_id = ? AND p.application_id = json_extract(n.input, '$.applicationId')
-          )
-        )`, Date.now(), chatId, chatId);
+      if (count) this.sql.exec(`UPDATE deliveries
+                                SET status     = 'skipped',
+                                    error      = 'Subscriber excluded this application.',
+                                    updated_at = ?
+                                WHERE chat_id = ?
+                                  AND status = 'pending'
+                                  AND notification_id IN (SELECT n.id
+                                                          FROM notifications n
+                                                          WHERE NOT EXISTS (SELECT 1
+                                                                            FROM subscriber_applications p
+                                                                            WHERE p.chat_id = ?
+                                                                              AND p.application_id = json_extract(n.input, '$.applicationId')))`, Date.now(), chatId, chatId);
     }
     this.invalidate();
   }
 
-  private queueApplicationPrompt(chatId: string, applications: Application[], runtime: TenantRuntime, messageId?: number, page = 0): boolean {
+  private queueApplicationPrompt(chatId: string, applications: DirectoryApplication[], runtime: TenantRuntime, messageId?: number, page = 0): boolean {
     if (this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending', 'sending')") >= runtime.limits.maxPendingDeliveries) return false;
-    const all = this.rows('SELECT application_mode FROM subscribers WHERE chat_id = ?', chatId)[0]?.application_mode !== 'selected';
+    const subscriber = this.rows('SELECT application_mode, access_mode, version FROM subscribers WHERE chat_id = ?', chatId)[0];
+    if (!subscriber) return false;
+    const all = subscriber.application_mode !== 'selected';
+    const allLabel = subscriber.access_mode === 'selected' ? 'همه اپلیکیشن‌های مجاز' : 'همه اپلیکیشن‌ها';
     const selected = new Set(this.rows('SELECT application_id FROM subscriber_applications WHERE chat_id = ?', chatId).map((row) => String(row.application_id)));
     const text = all
-      ? '📬 دریافت اعلان: همه اپلیکیشن‌ها\nبرای دریافت فقط از یک اپلیکیشن، دکمه آن را انتخاب کنید. انتخاب دوباره آخرین مورد، دریافت همه را فعال می‌کند.'
+      ? `📬 دریافت اعلان: ${allLabel}\nبرای دریافت فقط از یک اپلیکیشن، دکمه آن را انتخاب کنید. انتخاب دوباره آخرین مورد، دریافت همه اپلیکیشن‌های مجاز را فعال می‌کند.`
       : '📬 دریافت اعلان: فقط اپلیکیشن‌های انتخاب‌شده\nبا دکمه‌ها انتخاب‌ها را تغییر دهید. تغییرات همان لحظه ذخیره می‌شوند؛ انتخاب دوباره آخرین مورد، دریافت همه را فعال می‌کند.';
     const inline_keyboard = [
-      [{text: `${all ? '✅ ' : ''}همه اپلیکیشن‌ها`, callback_data: 'apps:all'}],
-      ...applications.slice(page * 20, (page + 1) * 20).map((app) => [{text: `${!all && selected.has(app.id) ? '✅ ' : ''}${app.name.slice(0, 50)}`, callback_data: `apps:toggle:${app.id}`}]),
+      [{text: `${all ? '✅ ' : ''}${allLabel}`, callback_data: 'apps:all'}],
+      ...applications.slice(page * 20, (page + 1) * 20).map((app) => [{
+        text: `${!all && selected.has(app.id) ? '✅ ' : ''}${app.name.slice(0, 50)}`,
+        callback_data: `apps:toggle:${app.id}`
+      }]),
     ];
     const navigation = [];
     if (page > 0) navigation.push({text: 'قبلی', callback_data: `apps:page:${page - 1}`});
     if ((page + 1) * 20 < applications.length) navigation.push({text: 'بعدی', callback_data: `apps:page:${page + 1}`});
     if (navigation.length) inline_keyboard.push(navigation);
-    const payload = {method: messageId ? 'editMessageText' : 'sendMessage', ...(messageId ? {message_id: messageId} : {}), reply_markup: {inline_keyboard}};
+    const payload = {
+      method: messageId ? 'editMessageText' : 'sendMessage',
+      subscriber_version: Number(subscriber.version),
+      directory_version: this.applicationDirectoryVersion, ...(messageId ? {message_id: messageId} : {}),
+      reply_markup: {inline_keyboard}
+    };
     this.sql.exec('INSERT INTO deliveries (chat_id, rendered, system_payload, updated_at) VALUES (?, ?, ?, ?)', chatId, text, JSON.stringify(payload), Date.now());
     this.invalidate();
     return true;
+  }
+
+  private allowedApplications(chatId: string): DirectoryApplication[] {
+    // Use the newest local snapshot even if a previous registry read arrived after an update.
+    return this.rows(`SELECT a.application_id, a.name FROM application_access a JOIN subscribers s ON s.chat_id = ?
+      WHERE a.enabled = 1 AND a.show_in_directory = 1
+      AND (a.audience_mode = 'all' OR EXISTS (SELECT 1 FROM application_audience p WHERE p.application_id = a.application_id AND p.chat_id = s.chat_id))
+      AND (s.access_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_allowed_applications p WHERE p.chat_id = s.chat_id AND p.application_id = a.application_id))
+      ORDER BY a.application_id`, chatId).map((row) => ({id: String(row.application_id), name: String(row.name)}));
+  }
+
+  private recipientWhere(applicationId: string): string {
+    return `s.active = 1 AND s.banned = 0
+      AND (s.application_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_applications p WHERE p.chat_id = s.chat_id AND p.application_id = ${applicationId}))
+      AND (s.access_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_allowed_applications p WHERE p.chat_id = s.chat_id AND p.application_id = ${applicationId}))
+      AND (${applicationId} IS NULL OR EXISTS (SELECT 1 FROM application_access a WHERE a.application_id = ${applicationId} AND a.enabled = 1
+        AND (a.audience_mode = 'all' OR EXISTS (SELECT 1 FROM application_audience p WHERE p.application_id = a.application_id AND p.chat_id = s.chat_id))))`;
+  }
+
+  /** Re-read local policy after each await; an in-flight attempt must not resurrect a revoked retry. */
+  private acceptsDelivery(delivery: DeliveryRow): boolean {
+    const subscriber = this.rows('SELECT active, banned, access_mode, application_mode, version FROM subscribers WHERE chat_id = ?', delivery.chat_id)[0];
+    if (!subscriber || subscriber.active !== 1 || subscriber.banned === 1) return false;
+    if (delivery.notification_id) {
+      return this.rows(`WITH request AS (SELECT ? AS app_id)
+        SELECT 1 FROM subscribers s CROSS JOIN request r WHERE s.chat_id = ? AND ${this.recipientWhere('r.app_id')}`, delivery.application_id, delivery.chat_id).length > 0;
+    }
+    if (!delivery.system_payload) return true;
+    try {
+      const system = JSON.parse(delivery.system_payload) as {
+        subscriber_version?: number;
+        directory_version?: number;
+        reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> }
+      };
+      if (system.subscriber_version !== undefined && system.subscriber_version !== subscriber.version) return false;
+      if (system.directory_version !== undefined && system.directory_version !== this.applicationDirectoryVersion) return false;
+      // Old queued menus predate the version marker: inspect their actual application buttons.
+      const ids = system.reply_markup?.inline_keyboard?.flat().map((button) => /^apps:toggle:(.+)$/.exec(button.callback_data ?? '')?.[1]).filter((id): id is string => !!id) ?? [];
+      if (subscriber.access_mode === 'selected') {
+        const allowed = new Set(this.rows('SELECT application_id FROM subscriber_allowed_applications WHERE chat_id = ?', delivery.chat_id).map((row) => String(row.application_id)));
+        if (ids.some((id) => !allowed.has(id))) return false;
+      }
+      if (ids.length && this.count(`SELECT COUNT(*) AS count FROM application_access a
+        WHERE a.application_id IN (SELECT value FROM json_each(?)) AND a.enabled = 1 AND a.show_in_directory = 1
+        AND (a.audience_mode = 'all' OR EXISTS (SELECT 1 FROM application_audience p WHERE p.application_id = a.application_id AND p.chat_id = ?))`, JSON.stringify(ids), delivery.chat_id) !== new Set(ids).size) return false;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private deactivate(chatId: string, reason: string): void {
@@ -817,9 +1113,7 @@ export class NotificationHub extends DurableObject<Env> {
           this.invalidate();
         });
         await this.ctx.storage.sync();
-        const recipient = this.rows('SELECT active, banned, application_mode FROM subscribers WHERE chat_id = ?', delivery.chat_id)[0];
-        const acceptsApplication = !delivery.notification_id || recipient?.application_mode !== 'selected' || this.rows('SELECT application_id FROM subscriber_applications WHERE chat_id = ? AND application_id = ?', delivery.chat_id, delivery.application_id).length > 0;
-        if (!recipient || recipient.active !== 1 || recipient.banned === 1 || !acceptsApplication) {
+        if (!this.acceptsDelivery(delivery)) {
           this.sql.exec("UPDATE deliveries SET status = 'skipped', error = 'Subscriber was banned, opted out, or excluded this application before delivery.', updated_at = ? WHERE id = ?", Date.now(), delivery.id);
           this.invalidate();
           continue;
@@ -833,7 +1127,12 @@ export class NotificationHub extends DurableObject<Env> {
 
   private async deliver(delivery: DeliveryRow, botToken: string): Promise<void> {
     try {
-      const system = delivery.system_payload ? JSON.parse(delivery.system_payload) as {method?: string; rich_message?: unknown; message_id?: number; reply_markup?: unknown} : null;
+      const system = delivery.system_payload ? JSON.parse(delivery.system_payload) as {
+        method?: string;
+        rich_message?: unknown;
+        message_id?: number;
+        reply_markup?: unknown
+      } : null;
       const rich = !!delivery.notification_id && system?.method === 'sendRichMessage';
       const isPhoto = !rich && !!delivery.image && delivery.stage === 0;
       const separateText = isPhoto && delivery.rendered.length > 1_024;
@@ -860,9 +1159,7 @@ export class NotificationHub extends DurableObject<Env> {
       }
       const now = Date.now();
       if (separateText) {
-        const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', delivery.chat_id)[0];
-        const acceptsApplication = this.rows("SELECT chat_id FROM subscribers WHERE chat_id = ? AND (application_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_applications p WHERE p.chat_id = subscribers.chat_id AND p.application_id = ?))", delivery.chat_id, delivery.application_id).length > 0;
-        const active = subscriber?.active === 1 && subscriber.banned !== 1 && acceptsApplication;
+        const active = this.acceptsDelivery(delivery);
         this.sql.exec('UPDATE deliveries SET status = ?, stage = 1, stage_attempts = 0, error = ?, next_attempt = ?, updated_at = ? WHERE id = ?', active ? 'pending' : 'skipped', active ? null : 'Photo was delivered; subscriber stopped before text delivery.', now + 1_000, now, delivery.id);
       } else {
         this.sql.exec("UPDATE deliveries SET status = 'sent', error = NULL, updated_at = ? WHERE id = ?", now, delivery.id);
@@ -870,9 +1167,7 @@ export class NotificationHub extends DurableObject<Env> {
     } catch (error) {
       const failure = error instanceof TelegramError ? error : new TelegramError('Delivery result is uncertain.', 0, true);
       const now = Date.now();
-      const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', delivery.chat_id)[0];
-      const acceptsApplication = !delivery.notification_id || this.rows("SELECT chat_id FROM subscribers WHERE chat_id = ? AND (application_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_applications p WHERE p.chat_id = subscribers.chat_id AND p.application_id = ?))", delivery.chat_id, delivery.application_id).length > 0;
-      const active = subscriber?.active === 1 && subscriber.banned !== 1 && acceptsApplication;
+      const active = this.acceptsDelivery(delivery);
       const partial = delivery.stage > 0 ? 'Photo was delivered. ' : '';
       if (failure.code === 429 && failure.retryAfter) {
         const retryAt = now + failure.retryAfter * 1_000;
@@ -907,7 +1202,8 @@ export class NotificationHub extends DurableObject<Env> {
                               FROM deliveries d
                                        JOIN subscribers s ON s.chat_id = d.chat_id
                               WHERE d.status = 'pending'
-                                AND s.active = 1 AND s.banned = 0`)[0]?.due;
+                                AND s.active = 1
+                                AND s.banned = 0`)[0]?.due;
       if (typeof next === 'number') {
         const globalNext = Number(this.rows("SELECT value FROM queue_state WHERE key = 'next_send_at'")[0]?.value ?? 0);
         // No await separates queue inspection and scheduling; an enqueue cannot interleave here.

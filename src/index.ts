@@ -12,6 +12,7 @@ import {
   type LoginAuditOutcome,
   type NotificationInput,
   type SourceContext,
+  type SubscriberUpdate,
   type Tenant,
   type TenantCreate,
   type TenantUpdate
@@ -196,7 +197,14 @@ adminData.get('/context', c => c.json(sourceContext(c.req.raw, 'admin')));
 adminData.get('/overview', async c => c.json(await hub(c).getOverview()));
 adminData.get('/settings', async c => c.json(await hub(c).getSettings()));
 adminData.put('/settings', async c => c.json(await hub(c).updateSettings(settingsInput(await jsonBody(c), await hub(c).getSettings()))));
-adminData.get('/subscribers', async c => c.json(await hub(c).listSubscribers(pageNumber(c.req.query('page')))));
+adminData.get('/subscribers', async c => c.json(await hub(c).listSubscribers(pageNumber(c.req.query('page')), c.req.query('search'))));
+adminData.get('/subscribers/:chatId', async c => {
+  const subscriber = await hub(c).getSubscriber(c.req.param('chatId'));
+  return subscriber ? c.json({subscriber}) : failure(c, 404, 'SUBSCRIBER_NOT_FOUND', 'کاربر پیدا نشد.');
+});
+adminData.patch('/subscribers/:chatId', async c => c.json({
+  subscriber: await hub(c).updateSubscriber(c.req.param('chatId'), object(await jsonBody(c)) as unknown as SubscriberUpdate)
+}));
 adminData.get('/notifications', async c => {
   const level = c.req.query('level') || undefined, search = c.req.query('search') || undefined;
   if (level && !LEVELS.includes(level as never)) throw new AppError(400, 'INVALID_LEVEL', 'سطح هشدار معتبر نیست.');
@@ -332,8 +340,11 @@ app.onError((error, c) => {
     APPLICATION_NOT_FOUND: [404, 'اپلیکیشن پیدا نشد.'],
     APPLICATION_EXISTS: [409, 'این شناسه اپلیکیشن قبلاً ثبت شده است.'],
     APPLICATION_LIMIT: [409, 'هر Tenant حداکثر ۱۰۰ اپلیکیشن دارد.'],
-    INVALID_APPLICATION: [400, 'شناسه، نام یا نسخه اپلیکیشن معتبر نیست.'],
+    INVALID_APPLICATION: [400, 'اطلاعات اپلیکیشن یا مخاطبان انتخاب‌شده معتبر نیست.'],
     STALE_APPLICATION: [409, 'اپلیکیشن تغییر کرده است؛ صفحه را تازه کنید.'],
+    SUBSCRIBER_NOT_FOUND: [404, 'کاربر پیدا نشد.'],
+    INVALID_SUBSCRIBER: [400, 'اطلاعات کاربر یا اپلیکیشن‌های انتخاب‌شده معتبر نیست.'],
+    STALE_SUBSCRIBER: [409, 'اطلاعات کاربر تغییر کرده است؛ نسخهٔ جدید را بارگیری کنید.'],
     INVALID_BAN: [400, 'درخواست مسدودسازی معتبر نیست.'],
     DAILY_LIMIT: [429, 'سهمیه اعلان روزانه این Tenant پر شده است.'],
     SUBSCRIBER_LIMIT: [429, 'ظرفیت اعضای این Tenant پر شده است.'],

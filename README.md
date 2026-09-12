@@ -112,11 +112,19 @@ The renderer uses the [Telegram Bot API's Rich Messages and buttons](https://cor
 | Telegram command | Action |
 | --- | --- |
 | `/start` | Subscribe to the bot's notifications |
-| `/apps` | Choose which applications to receive |
-| `/all` | Receive notifications from all applications |
+| `/apps` | Choose which permitted applications to receive |
+| `/all` | Receive notifications from every permitted application |
 | `/stop` | Stop receiving notifications |
 
-Users with no application selection receive everything. Admins can ban users individually or in bulk from **Subscribers**. Banned users cannot resubscribe; after unbanning, they must send `/start` again. Bans and subscription changes can skip pending deliveries; messages already sent cannot be recalled.
+New and existing subscribers initially have access to all current and future applications. In **Subscribers**, admins can edit a display-name override, private notes, and the applications each subscriber may receive. These changes preserve the Telegram name, username, and chat ID. Clearing the display name restores the Telegram name.
+
+Admin permissions and the subscriber's Telegram preferences are independent: delivery requires both to allow the application. `/all` cannot bypass admin restrictions. With admin access set to **Selected applications**, an empty selection permits no applications. With access set to **All applications**, future applications are permitted too.
+
+Each application also has its own audience in **Applications**: all current/future subscribers, or up to 1,000 selected existing subscribers in that tenant. An empty selected audience receives nothing. Delivery requires the application audience, subscriber admin permissions, and Telegram preferences all to permit it. **Show in bot directory** controls visibility in `/apps`; hiding an application still allows otherwise-authorized notifications.
+
+Admins can ban users individually or in bulk from **Subscribers**. Profile and application-access edits do not change subscription or ban status. Banned users cannot resubscribe; after unbanning, they must send `/start` again. Bans and access/preference changes can skip pending deliveries; messages already sent cannot be recalled.
+
+For admin integrations, read and patch `/api/admin/tenants/{tenantId}/subscribers/{chatId}` using an admin session; `/api/admin/subscribers/{chatId}` addresses the default tenant. PATCH requires the latest `version` as `expectedVersion`, and the exact deployment `Origin`. Send `accessMode` and `allowedApplicationIds` together: `all` requires an empty array; `selected` restricts delivery to the supplied IDs. `displayName` is limited to 80 characters and `notes` to 1,000. Both subscriber-list routes accept an optional `search` query of up to 100 characters. See the [OpenAPI reference](docs/openapi.yaml) for request and response schemas.
 
 ## Local development
 

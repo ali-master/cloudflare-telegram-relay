@@ -16,7 +16,7 @@ import type {
 } from './types';
 import {DEFAULT_SETTINGS, DEFAULT_TENANT_LIMITS, hubName} from './types';
 import {telegramCall, TelegramError} from './telegram';
-import {ApplicationStore} from './applications';
+import {applicationAudience, ApplicationStore} from './applications';
 import {LoginAuditStore} from './login-audit';
 
 interface StoredTenant {
@@ -184,7 +184,14 @@ export class TenantRegistry extends DurableObject<Env> {
   private async wakeHub(tenant: StoredTenant): Promise<void> {
     const hub = this.env.HUB.getByName(hubName(tenant.id));
     await hub.initializeTenant(tenant.id, tenant.name);
+    await hub.refreshApplicationAccess(this.applications.list(tenant.id));
     await hub.wake();
+  }
+
+  private async validateApplicationAudience(tenant: StoredTenant, chatIds: string[]): Promise<void> {
+    const hub = this.env.HUB.getByName(hubName(tenant.id));
+    await hub.initializeTenant(tenant.id, tenant.name);
+    await hub.validateApplicationAudience(chatIds);
   }
 
   async listTenants(): Promise<Tenant[]> {
@@ -196,13 +203,17 @@ export class TenantRegistry extends DurableObject<Env> {
     return tenant ? this.publicTenant(tenant) : null;
   }
 
-  async getRuntime(id: string): Promise<TenantRuntime | null> {
+  async getRuntime(id: string, knownApplicationRevision?: string): Promise<TenantRuntime | null> {
     const tenant = this.tenants.get(tenantId(id));
-    return tenant ? {
+    if (!tenant) return null;
+    const applicationRevision = this.applications.revision(id);
+    return {
       ...this.publicTenant(tenant),
       botToken: this.token(tenant),
-      webhookSecret: this.secret(tenant)
-    } : null;
+      webhookSecret: this.secret(tenant),
+      applicationRevision,
+      ...(knownApplicationRevision === applicationRevision ? {} : {applications: this.applications.list(id)})
+    };
   }
 
   async createTenant(input: TenantCreate): Promise<{ tenant: Tenant }> {
@@ -261,8 +272,11 @@ export class TenantRegistry extends DurableObject<Env> {
     application: Application;
     apiKey: string
   }> {
-    this.stored(tenantId);
-    const result = await this.applications.create(tenantId, input);
+    const tenant = this.stored(tenantId);
+    const audience = applicationAudience(input)!;
+    const next = {...input, ...audience};
+    if (audience.audienceMode === 'selected') await this.validateApplicationAudience(tenant, audience.audienceChatIds);
+    const result = await this.applications.create(tenantId, next);
     this.statuses.delete(tenantId);
     this.statusRequests.delete(tenantId);
     await this.wakeHub(this.stored(tenantId));
@@ -270,8 +284,16 @@ export class TenantRegistry extends DurableObject<Env> {
   }
 
   async updateApplication(tenantId: string, id: string, input: ApplicationUpdate): Promise<Application> {
-    this.stored(tenantId);
-    const result = this.applications.update(tenantId, id, input);
+    const tenant = this.stored(tenantId);
+    const audience = applicationAudience(input, true);
+    const current = this.applications.get(tenantId, id);
+    if (!current) fail('APPLICATION_NOT_FOUND', 'Application does not exist.');
+    const next = {
+      ...input, ...audience,
+      expectedVersion: input.expectedVersion === undefined ? current.version : input.expectedVersion
+    };
+    if (audience?.audienceMode === 'selected') await this.validateApplicationAudience(tenant, audience.audienceChatIds);
+    const result = this.applications.update(tenantId, id, next);
     this.statuses.delete(tenantId);
     this.statusRequests.delete(tenantId);
     await this.wakeHub(this.stored(tenantId));
@@ -353,7 +375,9 @@ export class TenantRegistry extends DurableObject<Env> {
     const runtime: TenantRuntime = {
       ...this.publicTenant(current),
       botToken: this.token(current),
-      webhookSecret: this.secret(current)
+      webhookSecret: this.secret(current),
+      applicationRevision: this.applications.revision(id),
+      applications: this.applications.list(id)
     };
     const signature = `${current.version}:${runtime.botToken}:${runtime.webhookSecret}`;
     const cached = this.statuses.get(id);

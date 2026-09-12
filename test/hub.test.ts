@@ -2,7 +2,7 @@ import {env} from 'cloudflare:workers';
 import {evictDurableObject, runDurableObjectAlarm, runInDurableObject} from 'cloudflare:test';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {NotificationHub} from '../src/hub';
-import type {Env, NotificationInput, TenantLimits, TenantRuntime} from '../src/types';
+import type {Env, NotificationInput, SubscriberUpdate, TenantLimits, TenantRuntime} from '../src/types';
 import {hubName} from '../src/types';
 
 const bindings = env as unknown as Env;
@@ -806,6 +806,285 @@ async function applicationsTenant() {
   hub = account.hub;
   return account;
 }
+
+async function subscriberPolicy(chatId: string, allowedApplicationIds: string[], accessMode: 'all' | 'selected' = 'selected') {
+  const subscriber = await hub.getSubscriber(chatId);
+  return await hub.updateSubscriber(chatId, {expectedVersion: subscriber!.version, accessMode, allowedApplicationIds});
+}
+
+describe('subscriber administrative profiles and access policies', () => {
+  it('preserves editable profiles separately from Telegram identity, with optimistic versions and searchable cached pages', async () => {
+    await subscribe(1);
+    await subscribe(2);
+    expect(await hub.getSubscriber('1')).toMatchObject({displayName: null, notes: '', accessMode: 'all', allowedApplicationIds: [], version: 1});
+    await hub.listSubscribers(1, 'alias');
+    await hub.updateSubscriber('1', {expectedVersion: 1, displayName: '  Operator Alias  ', notes: '  Keep this note\nexactly.  '});
+    await subscribe(1, '/stop');
+    await subscribe(1);
+    expect(await hub.getSubscriber('1')).toMatchObject({
+      displayName: 'Operator Alias', notes: '  Keep this note\nexactly.  ', version: 2,
+      firstName: 'User 1', username: 'user1', active: true,
+    });
+    for (const search of [' ALIAS ', 'user1', 'User 1', '1']) expect((await hub.listSubscribers(1, search)).items.map((row) => row.chatId)).toEqual(['1']);
+    expect((await hub.listSubscribers(1, '%')).total).toBe(0);
+    await hub.updateSubscriber('1', {expectedVersion: 2, displayName: '   '});
+    await evictDurableObject(hub);
+    expect(await hub.getSubscriber('1')).toMatchObject({displayName: null, version: 3, notes: '  Keep this note\nexactly.  '});
+    expect(await hub.getSubscriber('999')).toBeNull();
+    await runInDurableObject(hub, (instance, state) => {
+      const sql = vi.spyOn(state.storage.sql, 'exec');
+      instance.listSubscribers(1);
+      expect(sql.mock.calls).toHaveLength(4); // page, both complete relation sets, total; never per-row reads
+      sql.mockClear();
+      instance.listSubscribers(1);
+      instance.getSubscriber('1');
+      expect(sql).not.toHaveBeenCalled();
+      sql.mockRestore();
+    });
+    await expect((async () => await hub.updateSubscriber('1', {expectedVersion: 1, notes: 'stale'}))()).rejects.toThrow('STALE_SUBSCRIBER:');
+  });
+
+  it('validates strict paired policies, tenant application membership, and concurrent versions without changing Telegram membership', async () => {
+    const account = await applicationsTenant();
+    await subscribe(1);
+    const foreign = await tenant();
+    await foreign.registry.createApplication(foreign.id, {id: 'foreign-app', name: 'Foreign'});
+    hub = account.hub;
+    const invalid: unknown[] = [
+      {notes: 'missing version'}, {expectedVersion: 0, notes: ''}, {expectedVersion: 1},
+      {expectedVersion: 1, firstName: 'overwrite'}, {expectedVersion: 1, displayName: 'a'.repeat(81)},
+      {expectedVersion: 1, notes: 'a'.repeat(1_001)}, {expectedVersion: 1, accessMode: 'selected'},
+      {expectedVersion: 1, allowedApplicationIds: []}, {expectedVersion: 1, accessMode: 'all', allowedApplicationIds: ['payments']},
+      {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: ['payments', 'payments']},
+      {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: ['foreign-app']},
+      {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: ['missing']},
+      {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: Array.from({length: 101}, (_, index) => `app-${index}`)},
+    ];
+    for (const patch of invalid) await expect((async () => await hub.updateSubscriber('1', patch as SubscriberUpdate))()).rejects.toThrow('INVALID_SUBSCRIBER:');
+    await expect((async () => await hub.updateSubscriber('999', {expectedVersion: 1, notes: ''}))()).rejects.toThrow('SUBSCRIBER_NOT_FOUND:');
+    await expect((async () => await hub.listSubscribers(1, 'a'.repeat(101)))()).rejects.toThrow('INVALID_SUBSCRIBER:');
+    await account.registry.updateApplication(account.id, 'payments', {enabled: false});
+    await subscribe(1, '/stop');
+    const results = await Promise.allSettled([
+      (async () => await hub.updateSubscriber('1', {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: ['payments']}))(),
+      (async () => await hub.updateSubscriber('1', {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: ['deployments']}))(),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(String((results.find((result) => result.status === 'rejected') as PromiseRejectedResult).reason)).toContain('STALE_SUBSCRIBER:');
+    expect(await hub.getSubscriber('1')).toMatchObject({active: false, version: 2});
+  });
+
+  it('intersects admin policy with preferences and prevents /all, /start, and stale buttons from widening access', async () => {
+    await applicationsTenant();
+    await subscribe(1);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    await chooseApplications(1, 'apps:toggle:payments');
+    await subscriberPolicy('1', ['deployments']);
+    expect((await hub.enqueue({...input, applicationId: 'payments'}, source)).notification.total).toBe(0);
+    expect((await hub.enqueue({...input, applicationId: 'deployments'}, source)).notification.total).toBe(0);
+    fetch.mockClear();
+    await chooseApplications(1, 'apps:toggle:payments');
+    expect(fetch).not.toHaveBeenCalled();
+    await subscribe(1, '/all');
+    await subscribe(1);
+    expect((await hub.enqueue({...input, applicationId: 'deployments'}, source)).notification.total).toBe(1);
+    expect((await hub.enqueue(input, source)).notification.total).toBe(0);
+    await subscriberPolicy('1', []);
+    await subscribe(1, '/all');
+    expect((await hub.enqueue({...input, applicationId: 'deployments'}, source)).notification.total).toBe(0);
+    expect(await hub.getSubscriber('1')).toMatchObject({accessMode: 'selected', allowedApplicationIds: [], applicationMode: 'all'});
+  });
+
+  it('revokes pending notifications and stale menus without replaying them when access returns', async () => {
+    await applicationsTenant();
+    await subscribe(1);
+    const payments = await hub.enqueue({...input, applicationId: 'payments'}, source);
+    const deployments = await hub.enqueue({...input, applicationId: 'deployments'}, source);
+    await subscribe(1, '/apps');
+    await subscriberPolicy('1', ['payments']);
+    expect((await hub.getNotification(payments.notification.id))?.notification.pending).toBe(1);
+    expect((await hub.getNotification(deployments.notification.id))?.notification.skipped).toBe(1);
+    expect(await runInDurableObject(hub, (_, state) => state.storage.sql.exec("SELECT status FROM deliveries WHERE notification_id IS NULL").one().status)).toBe('skipped');
+    await subscribe(1, '/apps');
+    const menu = await runInDurableObject(hub, (_, state) => state.storage.sql.exec("SELECT system_payload FROM deliveries WHERE notification_id IS NULL AND status = 'pending'").one());
+    expect(String(menu.system_payload)).toContain('apps:toggle:payments');
+    expect(String(menu.system_payload)).not.toContain('deployments');
+    await subscriberPolicy('1', [], 'all');
+    expect((await hub.getNotification(deployments.notification.id))?.notification.skipped).toBe(1);
+    await evictDurableObject(hub);
+    expect((await hub.getNotification(deployments.notification.id))?.notification.skipped).toBe(1);
+  });
+
+  it('rechecks policy between the durable attempt and network send', async () => {
+    await applicationsTenant();
+    await subscribe(1);
+    const notification = await hub.enqueue({...input, applicationId: 'payments'}, source);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    await resume();
+    await runInDurableObject(hub, async (instance, state) => {
+      const actualSync = state.storage.sync.bind(state.storage);
+      const sync = vi.spyOn(state.storage, 'sync').mockImplementationOnce(async () => {
+        await instance.updateSubscriber('1', {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: []});
+        await actualSync();
+      });
+      await instance.alarm();
+      sync.mockRestore();
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await hub.getNotification(notification.notification.id))?.notification.skipped).toBe(1);
+  });
+
+  it.each(['rate_limited', 'unknown', 'legacy_photo'] as const)('keeps %s outcomes truthful when access changes during network I/O', async (outcome) => {
+    await applicationsTenant();
+    await subscribe(1);
+    const notification = await hub.enqueue({...input, applicationId: 'payments', text: 'x'.repeat(1_300), ...(outcome === 'legacy_photo' ? {image: 'photo-file'} : {})}, source);
+    if (outcome === 'legacy_photo') await legacyDelivery(notification.notification.id);
+    let release!: () => void;
+    let announce!: () => void;
+    const started = new Promise<void>((resolve) => { announce = resolve; });
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      const response = outcome === 'rate_limited' ? new Response(JSON.stringify({ok: false, error_code: 429, parameters: {retry_after: 2}}), {status: 429}) : outcome === 'unknown' ? new Response('upstream failed', {status: 502}) : accepted();
+      announce();
+      return new Promise<Response>((resolve) => { release = () => resolve(response); });
+    });
+    await resume();
+    const alarm = runDurableObjectAlarm(hub);
+    await started;
+    await bindings.HUB.get(hub.id).updateSubscriber('1', {expectedVersion: 1, accessMode: 'selected', allowedApplicationIds: []});
+    release();
+    await alarm;
+    hub = bindings.HUB.get(hub.id);
+    const detail = (await hub.getNotification(notification.notification.id))!;
+    expect(detail.deliveries[0]).toMatchObject({status: outcome === 'unknown' ? 'unknown' : 'skipped', stage: outcome === 'legacy_photo' ? 1 : 0});
+    await tick(3_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('migrates existing subscribers to unrestricted policies without discarding identity or selections', async () => {
+    await applicationsTenant();
+    await subscribe(1);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    await chooseApplications(1, 'apps:toggle:payments');
+    await runInDurableObject(hub, (_, state) => {
+      state.storage.sql.exec('DROP TABLE subscriber_allowed_applications');
+      for (const column of ['display_name', 'notes', 'access_mode', 'version']) state.storage.sql.exec(`ALTER TABLE subscribers DROP COLUMN ${column}`);
+    });
+    await evictDurableObject(hub);
+    expect(await hub.getSubscriber('1')).toMatchObject({
+      firstName: 'User 1', active: true, applicationMode: 'selected', applicationIds: ['payments'],
+      accessMode: 'all', allowedApplicationIds: [], displayName: null, notes: '', version: 1,
+    });
+  });
+});
+
+describe('application audience and directory enforcement', () => {
+  it('omits unchanged audience snapshots for prefix application IDs both warm and after eviction', async () => {
+    const account = await tenant();
+    hub = account.hub;
+    await account.registry.createApplication(account.id, {id: 'api', name: 'API'});
+    await account.registry.createApplication(account.id, {id: 'api-server', name: 'Server'});
+    const hasSnapshot = () => runInDurableObject(hub, async (instance) => {
+      const runtime = await (instance as unknown as {runtime(): Promise<TenantRuntime>}).runtime();
+      return runtime.applications !== undefined;
+    });
+    expect(await hasSnapshot()).toBe(false);
+    await evictDurableObject(hub);
+    expect(await hasSnapshot()).toBe(false);
+  });
+
+  it('applies an application audience at creation and intersects it with subscriber policy and preferences', async () => {
+    const account = await applicationsTenant();
+    await subscribe(1);
+    await subscribe(2);
+    await subscribe(3);
+    await account.registry.createApplication(account.id, {id: 'private-app', name: 'Private', audienceMode: 'selected', audienceChatIds: ['1', '2'], showInDirectory: false});
+    expect((await hub.enqueue({...input, applicationId: 'private-app'}, source)).notification.total).toBe(2);
+    await subscriberPolicy('2', ['payments']);
+    expect((await hub.enqueue({...input, applicationId: 'private-app'}, source)).notification.total).toBe(1);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    await chooseApplications(1, 'apps:toggle:private-app');
+    expect(fetch).not.toHaveBeenCalled();
+    await chooseApplications(1, 'apps:toggle:payments');
+    expect((await hub.enqueue({...input, applicationId: 'private-app'}, source)).notification.total).toBe(0);
+    await subscribe(1, '/all');
+    expect((await hub.enqueue({...input, applicationId: 'private-app'}, source)).notification.total).toBe(1);
+    await account.registry.updateApplication(account.id, 'private-app', {audienceMode: 'selected', audienceChatIds: []});
+    expect((await hub.enqueue({...input, applicationId: 'private-app'}, source)).notification.total).toBe(0);
+    expect((await hub.enqueue({...input, applicationId: 'unknown-app'}, source)).notification.total).toBe(0);
+  });
+
+  it('rejects foreign audience IDs, permits known opted-out users, and rejects disabled or hidden stale menu callbacks', async () => {
+    const account = await applicationsTenant();
+    await subscribe(1);
+    await subscribe(2, '/start');
+    await subscribe(2, '/stop');
+    await hub.validateApplicationAudience(['1', '2']);
+    await hub.validateApplicationAudience([]);
+    await expect((async () => await hub.validateApplicationAudience(['999']))()).rejects.toThrow('INVALID_APPLICATION:');
+    await expect((async () => await hub.validateApplicationAudience(['1', '1']))()).rejects.toThrow('INVALID_APPLICATION:');
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    await subscribe(1, '/apps');
+    await account.registry.updateApplication(account.id, 'payments', {showInDirectory: false});
+    await account.registry.updateApplication(account.id, 'deployments', {enabled: false});
+    await chooseApplications(1, 'apps:toggle:payments');
+    await chooseApplications(1, 'apps:toggle:deployments');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await runInDurableObject(hub, (_, state) => state.storage.sql.exec('SELECT status FROM deliveries WHERE notification_id IS NULL').one().status)).toBe('skipped');
+    await subscribe(1, '/apps');
+    const menu = await runInDurableObject(hub, (_, state) => state.storage.sql.exec("SELECT system_payload FROM deliveries WHERE status = 'pending' AND notification_id IS NULL").one());
+    expect(JSON.parse(String(menu.system_payload)).reply_markup.inline_keyboard.flat()).toEqual([{text: '✅ همه اپلیکیشن‌ها', callback_data: 'apps:all'}]);
+  });
+
+  it('revokes queued audiences immediately and ignores older snapshots before and after eviction', async () => {
+    const account = await applicationsTenant();
+    await subscribe(1);
+    await subscribe(2);
+    const original = await account.registry.listApplications(account.id);
+    const notification = await hub.enqueue({...input, applicationId: 'payments'}, source);
+    await subscribe(1, '/apps');
+    await account.registry.updateApplication(account.id, 'payments', {audienceMode: 'selected', audienceChatIds: ['2']});
+    expect((await hub.getNotification(notification.notification.id))?.notification).toMatchObject({pending: 1, skipped: 1});
+    await hub.refreshApplicationAccess(original);
+    await evictDurableObject(hub);
+    await hub.refreshApplicationAccess(original);
+    expect((await hub.enqueue({...input, applicationId: 'payments'}, source)).notification.total).toBe(1);
+    const current = await account.registry.listApplications(account.id);
+    await runInDurableObject(hub, (instance, state) => {
+      const sql = vi.spyOn(state.storage.sql, 'exec');
+      instance.refreshApplicationAccess(current);
+      instance.refreshApplicationAccess(current);
+      expect(sql).not.toHaveBeenCalled();
+      sql.mockRestore();
+    });
+    const runtime = await account.registry.getRuntime(account.id);
+    expect(runtime?.applications).toHaveLength(2);
+    const unchanged = await account.registry.getRuntime(account.id, runtime!.applicationRevision);
+    expect(unchanged?.applications).toBeUndefined();
+    await subscribe(2, '/apps');
+    const menu = await runInDurableObject(hub, (_, state) => state.storage.sql.exec("SELECT system_payload FROM deliveries WHERE chat_id = '2' AND notification_id IS NULL AND status = 'pending'").one());
+    expect(String(menu.system_payload)).toContain('apps:toggle:payments');
+  });
+
+  it('suppresses a menu claimed before a directory update without leaking its old labels', async () => {
+    const account = await applicationsTenant();
+    await subscribe(1);
+    await subscribe(1, '/apps');
+    const updated = (await account.registry.listApplications(account.id)).map((app) => ({...app, version: app.version + 1, showInDirectory: false}));
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    await resume();
+    await runInDurableObject(hub, async (instance, state) => {
+      const actualSync = state.storage.sync.bind(state.storage);
+      const sync = vi.spyOn(state.storage, 'sync').mockImplementationOnce(async () => {
+        instance.refreshApplicationAccess(updated);
+        await actualSync();
+      });
+      await instance.alarm();
+      sync.mockRestore();
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await runInDurableObject(hub, (_, state) => state.storage.sql.exec('SELECT status FROM deliveries WHERE notification_id IS NULL').one().status)).toBe('skipped');
+  });
+});
 
 describe('subscriber application preferences', () => {
   it('defaults to all, supports selected apps, and restores all when the final choice is removed', async () => {
