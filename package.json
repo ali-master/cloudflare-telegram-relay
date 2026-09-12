@@ -1,0 +1,16 @@
+{
+  "name": "telegram-cf-worker",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "hono": "^4.13.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "wrangler": "^4.131.1"
+  }
+}
