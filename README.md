@@ -97,6 +97,16 @@ A `202` response means the notification was accepted; delivery runs in the backg
 
 See [integration recipes](docs/integrations.md) for **GitHub Actions, GitLab CI, Alertmanager, and Grafana**, or the [OpenAPI reference](docs/openapi.yaml) for all endpoints and payload fields.
 
+### Telegram message layout
+
+Notifications use Telegram's structured Rich Messages as a technical report, with a Persian heading, the literal body, and an optional photo inside the same message. Details stay visible in native monospace blocks: **CONTEXT** contains the application, event, environment, severity, and optional country flag; **TIME** shows numeric Jalali and Gregorian dates with a shared time in **Asia/Tehran**, using ASCII digits for both calendars. Optional **METADATA** and **TAGS** blocks follow.
+
+Metadata keeps scalar key/value pairs intact. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters. The report uses neither tables nor collapsed sections. Actions include an optional primary incident-link button and separate event/notification-ID copy buttons; the UUID appears only through its copy button.
+
+Keep sending the same JSON fields. Text, titles, and metadata remain literal content; submitted HTML or Markdown is not interpreted. The relay builds the formatting itself. The API retains its **3,000-character text** limit and **4,000-character complete plain-text validation** limit; these are project limits, not Telegram's Rich Message limits.
+
+The renderer uses the [Telegram Bot API's Rich Messages and buttons](https://core.telegram.org/bots/api#sendrichmessage). Telegram describes rendering in [supported clients](https://core.telegram.org/bots/features#messages-and-formatting), but does not document a minimum client version or guarantee an automatic fallback for older clients.
+
 ## Subscriber controls
 
 | Telegram command | Action |

@@ -844,10 +844,11 @@ function updateApiExample() {
     `  --data '${JSON.stringify({
       event: 'deployment.completed',
       level: 'success',
-      text: 'Version 2.4.0 is ready.',
+      title: 'استقرار نسخهٔ جدید',
+      text: 'نسخهٔ جدید با موفقیت در محیط اصلی مستقر شد.',
       environment: 'production',
       url: 'https://ci.example.com/pipelines/123',
-      metadata: { version: '2.4.0' },
+      metadata: { version: '2.4.0', commit: 'a1b2c3d', duration: '42s' },
       tags: ['release', 'backend'],
     }, null, 2)}'`,
   ].join('\n');

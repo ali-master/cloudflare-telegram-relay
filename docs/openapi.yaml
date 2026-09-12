@@ -3198,6 +3198,7 @@ components:
           type: "string"
           maxLength: 3000
           minLength: 1
+          description: "Literal notification body. HTML and Markdown are not parsed. The relay applies its own rich layout; 3,000 characters is the relay limit."
         level:
           type: "string"
           enum:
@@ -3208,7 +3209,7 @@ components:
           format: "date-time"
           maxLength: 40
           pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
-          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time."
+          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time. The Telegram TIME block shows numeric Jalali and Gregorian dates with a shared time in Asia/Tehran, using ASCII digits in both calendars; the stored/API value remains UTC."
         title:
           type: "string"
           maxLength: 160
@@ -3216,12 +3217,12 @@ components:
         image:
           type: "string"
           maxLength: 2048
-          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs; no multipart/base64 uploads."
+          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs and embeds the photo in the same rich notification; no multipart/base64 uploads."
           minLength: 1
         url:
           type: "string"
           maxLength: 2048
-          description: "HTTPS incident/dashboard/pipeline link without embedded credentials."
+          description: "HTTPS incident/dashboard/pipeline link without embedded credentials, rendered as a primary action button."
           format: "uri"
           pattern: "^https://"
         environment:
@@ -3231,6 +3232,7 @@ components:
         metadata:
           type: "object"
           maxProperties: 20
+          description: "Literal scalar key/value pairs rendered in an always-visible native monospace METADATA block. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
           propertyNames:
             type: "string"
             minLength: 1
@@ -3257,7 +3259,7 @@ components:
       required:
         ["event","text"]
       additionalProperties: false
-      description: "Application identity/name come from the header key. Unknown fields (including caller-supplied applicationId or chat_id) are rejected. Strings are trimmed. Full formatted plain text must be at most 4,000 characters in addition to individual limits."
+      description: "Application identity/name come from the header key. Unknown fields (including caller-supplied applicationId or chat_id) are rejected. Strings are trimmed and supplied text, titles, and metadata are literal; HTML/Markdown is not interpreted. The relay builds a Telegram Rich Message technical report with a Persian heading, literal body, and optional embedded photo. Always-visible native monospace blocks include CONTEXT for application/event/environment/severity and optional country flag, TIME for numeric Jalali/Gregorian dates and a shared Asia/Tehran time using ASCII digits, and optional METADATA and TAGS. There are no tables or collapsed sections. Long or Persian metadata keys and values place the value beneath its key without truncation or renderer-added hidden direction-control characters. Actions include an optional primary URL button and separate event/notification-ID copy buttons; the UUID is available only through its copy button. The 3,000-character text limit and 4,000-character full formatted plain-text validation limit are relay policy, not Telegram Rich Message limits. Rendering depends on Telegram client support; no minimum client version or automatic fallback is guaranteed. See https://core.telegram.org/bots/api#sendrichmessage and https://core.telegram.org/bots/features#messages-and-formatting."
       examples:
         -
           event: "deployment.completed"
@@ -3283,6 +3285,7 @@ components:
           type: "string"
           maxLength: 3000
           minLength: 1
+          description: "Literal notification body. HTML and Markdown are not parsed. The relay applies its own rich layout; 3,000 characters is the relay limit."
         level:
           type: "string"
           enum:
@@ -3293,7 +3296,7 @@ components:
           format: "date-time"
           maxLength: 40
           pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
-          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time."
+          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time. The Telegram TIME block shows numeric Jalali and Gregorian dates with a shared time in Asia/Tehran, using ASCII digits in both calendars; the stored/API value remains UTC."
         title:
           type: "string"
           maxLength: 160
@@ -3301,12 +3304,12 @@ components:
         image:
           type: "string"
           maxLength: 2048
-          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs; no multipart/base64 uploads."
+          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs and embeds the photo in the same rich notification; no multipart/base64 uploads."
           minLength: 1
         url:
           type: "string"
           maxLength: 2048
-          description: "HTTPS incident/dashboard/pipeline link without embedded credentials."
+          description: "HTTPS incident/dashboard/pipeline link without embedded credentials, rendered as a primary action button."
           format: "uri"
           pattern: "^https://"
         environment:
@@ -3316,6 +3319,7 @@ components:
         metadata:
           type: "object"
           maxProperties: 20
+          description: "Literal scalar key/value pairs rendered in an always-visible native monospace METADATA block. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
           propertyNames:
             type: "string"
             minLength: 1
@@ -3367,6 +3371,7 @@ components:
         unknown:
           type: "integer"
           minimum: 0
+          description: "Deliveries whose outcome could not be confirmed. They are not automatically resent because Telegram may already have accepted the message."
         skipped:
           type: "integer"
           minimum: 0
@@ -3637,10 +3642,10 @@ components:
           type: "integer"
           minimum: 0
           maximum: 1
-          description: "1 means a photo was accepted before a separate text-message stage."
+          description: "Legacy split-delivery progress: 1 means a photo was accepted before a separate text stage. New notifications use one Telegram Rich Message."
         partial:
           type: "boolean"
-          description: "Photo was accepted but the whole notification has not completed."
+          description: "Legacy split-delivery state: a photo was accepted but the whole notification has not completed."
       required:
         ["chatId","status","attempts","error","stage","partial"]
       additionalProperties: false
@@ -3917,6 +3922,7 @@ components:
           type: "string"
           maxLength: 3000
           minLength: 1
+          description: "Literal notification body. HTML and Markdown are not parsed. The relay applies its own rich layout; 3,000 characters is the relay limit."
         level:
           type: "string"
           enum:
@@ -3927,7 +3933,7 @@ components:
           format: "date-time"
           maxLength: 40
           pattern: "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
-          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time."
+          description: "Explicit UTC offset required; up to 9 fractional-second digits accepted and normalized to UTC milliseconds. Defaults to acceptance time. The Telegram TIME block shows numeric Jalali and Gregorian dates with a shared time in Asia/Tehran, using ASCII digits in both calendars; the stored/API value remains UTC."
         title:
           type: "string"
           maxLength: 160
@@ -3935,12 +3941,12 @@ components:
         image:
           type: "string"
           maxLength: 2048
-          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs; no multipart/base64 uploads."
+          description: "Public HTTPS image URL without credentials, or this bot's Telegram file_id (10–512 letters, digits, underscores, or hyphens). Telegram retrieves URLs and embeds the photo in the same rich notification; no multipart/base64 uploads."
           minLength: 1
         url:
           type: "string"
           maxLength: 2048
-          description: "HTTPS incident/dashboard/pipeline link without embedded credentials."
+          description: "HTTPS incident/dashboard/pipeline link without embedded credentials, rendered as a primary action button."
           format: "uri"
           pattern: "^https://"
         environment:
@@ -3950,6 +3956,7 @@ components:
         metadata:
           type: "object"
           maxProperties: 20
+          description: "Literal scalar key/value pairs rendered in an always-visible native monospace METADATA block. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters."
           propertyNames:
             type: "string"
             minLength: 1
@@ -3980,7 +3987,7 @@ components:
       required:
         ["applicationId","event","text"]
       additionalProperties: false
-      description: "Dashboard broadcasts require an enabled applicationId in this tenant. Its configured name replaces application."
+      description: "Dashboard broadcasts require an enabled applicationId in this tenant. Its configured name replaces application. Content remains literal and uses the same relay-generated Telegram Rich Message layout as producer notifications. The 3,000-character text and 4,000-character full formatted plain-text validation limits also apply."
       examples:
         -
           event: "deployment.completed"

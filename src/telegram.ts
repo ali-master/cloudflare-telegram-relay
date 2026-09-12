@@ -1,4 +1,5 @@
-import type { NotificationInput, SourceContext } from './types';
+export { countryFlag, formatNotification, formatRichNotification } from './rich-message';
+export type { InputRichMessage } from './rich-message';
 
 export type TelegramErrorReason = 'timeout' | 'network' | 'invalid_response' | 'upstream_error' | 'rate_limited' | 'rejected';
 
@@ -60,30 +61,4 @@ export async function telegramCall<T = Record<string, unknown>>(
     if (controller.signal.aborted) throw new TelegramError('Telegram response is uncertain (timeout).', 0, true, undefined, 'timeout');
     throw new TelegramError('Telegram response is uncertain (network failure).', 0, true, undefined, 'network');
   } finally { clearTimeout(timer); }
-}
-
-const LEVEL_LABELS = { info: 'ℹ️ INFO', success: '✅ SUCCESS', warning: '⚠️ WARNING', error: '🔴 ERROR', critical: '🚨 CRITICAL' } as const;
-
-export function countryFlag(country: string): string {
-  if (!/^[A-Z]{2}$/.test(country) || ['XX', 'T1'].includes(country)) return '';
-  return [...country].map((letter) => String.fromCodePoint(127397 + letter.charCodeAt(0))).join('');
-}
-
-/** Plain text prevents application-controlled fields from becoming Telegram formatting. */
-export function formatNotification(input: NotificationInput, source?: SourceContext, showCountryFlag = false): string {
-  const lines = [
-    `${LEVEL_LABELS[input.level]} · ${input.application}`,
-    ...(input.title ? [input.title] : []),
-    `Event: ${input.event}`,
-    ...(input.environment ? [`Environment: ${input.environment}`] : []),
-    `Time: ${input.timestamp}`,
-    ...(showCountryFlag && source && countryFlag(source.country) ? [`Origin: ${countryFlag(source.country)} ${source.country}`] : []),
-    '', input.text,
-  ];
-  if (input.metadata && Object.keys(input.metadata).length) {
-    lines.push('', ...Object.entries(input.metadata).map(([key, value]) => `${key}: ${value}`));
-  }
-  if (input.tags?.length) lines.push('', `Tags: ${input.tags.join(', ')}`);
-  if (input.url) lines.push('', input.url);
-  return lines.join('\n');
 }

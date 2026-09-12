@@ -13,7 +13,7 @@ import type {
   Application
 } from './types';
 import {AppError, DEFAULT_SETTINGS, LEVELS} from './types';
-import {formatNotification, telegramCall, TelegramError} from './telegram';
+import {formatNotification, formatRichNotification, telegramCall, TelegramError} from './telegram';
 
 type Row = Record<string, SqlStorageValue>;
 
@@ -236,10 +236,23 @@ export class NotificationHub extends DurableObject<Env> {
       if (!subscriberColumns.some((column) => column.name === 'ban_reason')) this.sql.exec('ALTER TABLE subscribers ADD COLUMN ban_reason TEXT');
       if (!subscriberColumns.some((column) => column.name === 'application_mode')) this.sql.exec("ALTER TABLE subscribers ADD COLUMN application_mode TEXT NOT NULL DEFAULT 'all'");
       if (!this.rows('PRAGMA table_info(deliveries)').some((column) => column.name === 'system_payload')) this.sql.exec('ALTER TABLE deliveries ADD COLUMN system_payload TEXT');
-      this.sql.exec(`CREATE TABLE IF NOT EXISTS subscriber_applications (
-        chat_id TEXT NOT NULL REFERENCES subscribers(chat_id) ON DELETE CASCADE,
-        application_id TEXT NOT NULL, PRIMARY KEY(chat_id, application_id)
-      )`);
+      this.sql.exec(`CREATE TABLE IF NOT EXISTS subscriber_applications
+      (
+          chat_id
+          TEXT
+          NOT
+          NULL
+          REFERENCES
+          subscribers
+                     (
+          chat_id
+                     ) ON DELETE CASCADE,
+          application_id TEXT NOT NULL, PRIMARY KEY
+                     (
+                         chat_id,
+                         application_id
+                     )
+          )`);
       this.sql.exec('CREATE INDEX IF NOT EXISTS notifications_visible_created ON notifications(purging, created_at DESC)');
       this.sql.exec('INSERT OR IGNORE INTO settings (id, body) VALUES (1, ?)', JSON.stringify(DEFAULT_SETTINGS));
       this.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(String(this.rows('SELECT body FROM settings WHERE id = 1')[0].body)) };
@@ -400,6 +413,7 @@ export class NotificationHub extends DurableObject<Env> {
       const settings = this.getSettings();
       const rendered = formatNotification(input, source, settings.showCountryFlag);
       if (rendered.length > 4_000) return {error: new AppError(400, 'MESSAGE_TOO_LONG', 'The formatted notification must contain at most 4000 characters.')};
+      const richPayload = JSON.stringify({method: 'sendRichMessage', rich_message: formatRichNotification(input, source, settings.showCountryFlag, id)});
       const day = new Date(now).toISOString().slice(0, 10);
       const used = Number(this.rows('SELECT notifications FROM daily_usage WHERE day = ?', day)[0]?.notifications ?? 0);
       if (used >= runtime.limits.notificationsPerDay) return { error: new AppError(429, 'DAILY_LIMIT', 'DAILY_LIMIT: The daily notification quota has been reached.') };
@@ -411,12 +425,12 @@ export class NotificationHub extends DurableObject<Env> {
       this.sql.exec('INSERT INTO daily_usage (day, notifications) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET notifications = notifications + 1', day);
       this.sql.exec('INSERT INTO notifications (id, input, source, created_at, idempotency_key, fingerprint) VALUES (?, ?, ?, ?, ?, ?)', id, JSON.stringify(input), JSON.stringify(source), now, idempotencyKey ?? null, fingerprint);
       // INSERT SELECT gives the notification one atomic snapshot of active subscribers.
-      this.sql.exec(`INSERT INTO deliveries (notification_id, chat_id, rendered, image, silent, updated_at)
-                     SELECT ?, chat_id, ?, ?, ?, ?
+      this.sql.exec(`INSERT INTO deliveries (notification_id, chat_id, rendered, image, silent, updated_at, system_payload)
+                     SELECT ?, chat_id, ?, ?, ?, ?, ?
                      FROM subscribers s
                      WHERE active = 1 AND banned = 0 AND (application_mode = 'all' OR EXISTS (
                        SELECT 1 FROM subscriber_applications p WHERE p.chat_id = s.chat_id AND p.application_id = ?
-                     ))`, id, rendered, input.image ?? null, input.silent ? 1 : 0, now, input.applicationId ?? null);
+                     ))`, id, rendered, input.image ?? null, input.silent ? 1 : 0, now, richPayload, input.applicationId ?? null);
       this.invalidate();
       return {
         notification: this.toNotification(this.rows<NotificationRow>('SELECT * FROM notifications WHERE id = ?', id)[0]),
@@ -818,21 +832,27 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   private async deliver(delivery: DeliveryRow, botToken: string): Promise<void> {
-    const isPhoto = !!delivery.image && delivery.stage === 0;
-    const separateText = isPhoto && delivery.rendered.length > 1_024;
-    const payload: Record<string, unknown> = {chat_id: delivery.chat_id, disable_notification: !!delivery.silent};
-    const system = delivery.system_payload ? JSON.parse(delivery.system_payload) as {method?: string; message_id?: number; reply_markup?: unknown} : null;
-    if (system?.reply_markup) payload.reply_markup = system.reply_markup;
-    if (system?.message_id) payload.message_id = system.message_id;
-    if (isPhoto) {
-      payload.photo = delivery.image;
-      payload.caption = separateText ? `${delivery.rendered.split('\n')[0].slice(0, 900)}\nDetails follow in the next message.` : delivery.rendered;
-    } else {
-      payload.text = delivery.rendered;
-      payload.link_preview_options = {is_disabled: true};
-    }
     try {
-      const method = system?.method === 'editMessageText' ? 'editMessageText' : isPhoto ? 'sendPhoto' : 'sendMessage';
+      const system = delivery.system_payload ? JSON.parse(delivery.system_payload) as {method?: string; rich_message?: unknown; message_id?: number; reply_markup?: unknown} : null;
+      const rich = !!delivery.notification_id && system?.method === 'sendRichMessage';
+      const isPhoto = !rich && !!delivery.image && delivery.stage === 0;
+      const separateText = isPhoto && delivery.rendered.length > 1_024;
+      const payload: Record<string, unknown> = {chat_id: delivery.chat_id, disable_notification: !!delivery.silent};
+      if (rich) {
+        if (!system.rich_message || typeof system.rich_message !== 'object' || Array.isArray(system.rich_message)) throw new TelegramError('The stored rich notification is invalid.', 0);
+        payload.rich_message = system.rich_message;
+      } else {
+        if (system?.reply_markup) payload.reply_markup = system.reply_markup;
+        if (system?.message_id) payload.message_id = system.message_id;
+        if (isPhoto) {
+          payload.photo = delivery.image;
+          payload.caption = separateText ? `${delivery.rendered.split('\n')[0].slice(0, 900)}\nDetails follow in the next message.` : delivery.rendered;
+        } else {
+          payload.text = delivery.rendered;
+          payload.link_preview_options = {is_disabled: true};
+        }
+      }
+      const method = rich ? 'sendRichMessage' : system?.method === 'editMessageText' ? 'editMessageText' : isPhoto ? 'sendPhoto' : 'sendMessage';
       if (method === 'editMessageText') delete payload.disable_notification;
       const result = await telegramCall(botToken, method, payload);
       if (!result.result || !Number.isSafeInteger(result.result.message_id) || Number(result.result.message_id) <= 0) {
