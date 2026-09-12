@@ -1,16 +1,46 @@
 {
-  "name": "telegram-cf-worker",
+  "name": "cloudflare-telegram-relay",
+  "description": "Cloudflare Telegram Relay for monitoring, alert management, and CI/CD",
+  "author": {
+    "email": "ali_4286@live.com",
+    "name": "Ali Torki",
+    "url": "https://github.com/ali-master"
+  },
   "type": "module",
+  "cloudflare": {
+    "bindings": {
+      "API_KEY": {
+        "description": "Admin dashboard login key. Generate a unique value with `openssl rand -hex 32` and save it in your password manager. Configure Telegram bots and application API keys in the dashboard after deployment."
+      }
+    }
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy:check": "wrangler deploy --dry-run"
   },
   "dependencies": {
-    "hono": "^4.13.7"
+    "hono": "^4.13.7",
+    "ipaddr.js": "^2.5.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@types/node": "^22.20.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
     "wrangler": "^4.131.1"
+  },
+  "overrides": {
+    "sharp": "^0.35.4"
+  },
+  "allowScripts": {
+    "workerd@1.20260815.1": true,
+    "workerd@1.20260911.1": true,
+    "esbuild@0.28.1": true,
+    "fsevents@2.3.3": true
   }
 }
