@@ -43,7 +43,10 @@
     ]
   },
   "observability": {
-    "enabled": true
+    "enabled": false,
+    "traces": {
+      "enabled": false
+    }
   },
   "upload_source_maps": true,
   "placement": {
