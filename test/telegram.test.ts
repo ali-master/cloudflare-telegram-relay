@@ -48,6 +48,29 @@ describe('Telegram transport and safe diagnostics', () => {
     expect(fetcher.mock.calls[0][1]?.redirect).toBe('manual');
   });
 
+  it('treats a confirmed unchanged-message edit as successful without exposing the raw diagnostic', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      ok: false, error_code: 400, description: `Bad Request: message is not modified: ${privateDetail}`,
+    }), {status: 400}));
+    const result = await telegramCall(token, 'editMessageText', {chat_id: 42, message_id: 123, rich_message: {blocks: []}});
+    expect(result).toEqual({ok: true, result: {message_id: 123}});
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(JSON.stringify(result)).not.toContain('private-upstream-diagnostic');
+  });
+
+  it.each([
+    {method: 'sendRichMessage', messageId: 123, status: 400, description: 'Bad Request: message is not modified'},
+    {method: 'editMessageText', messageId: 0, status: 400, description: 'Bad Request: message is not modified'},
+    {method: 'editMessageText', messageId: '123', status: 400, description: 'Bad Request: message is not modified'},
+    {method: 'editMessageText', messageId: Number.MAX_SAFE_INTEGER + 1, status: 400, description: 'Bad Request: message is not modified'},
+    {method: 'editMessageText', messageId: 123, status: 403, description: 'Bad Request: message is not modified'},
+    {method: 'editMessageText', messageId: 123, status: 400, description: 'Bad Request: message is not modified unexpectedly'},
+    {method: 'editMessageText', messageId: 123, status: 400, description: 'Bad Request: message to edit not found'},
+  ])('does not mistake other failures for an idempotent edit: $method / $messageId / $status / $description', async ({method, messageId, status, description}) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ok: false, error_code: status, description}), {status}));
+    await expect(telegramCall(token, method, {chat_id: 42, message_id: messageId})).rejects.toMatchObject({code: status, uncertain: false, reason: 'rejected'});
+  });
+
   it('keeps network errors safe and never retries inside the transport', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError(privateDetail));
     expect(await failure()).toMatchObject({code: 0, reason: 'network', uncertain: true});

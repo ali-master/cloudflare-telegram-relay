@@ -40,6 +40,8 @@ const titles = {
   api: 'راهنمای اتصال',
   tenants: 'مدیریت فضاها',
   applications: 'اپلیکیشن‌ها',
+  incidents: 'مرکز رخدادها',
+  automation: 'قوانین ارسال',
   'login-audit': 'گزارش ورود به داشبورد'
 };
 const labels = {
@@ -241,6 +243,7 @@ function renderTenantSelector() {
 }
 
 function clearTenantData() {
+  window.RelayAutomation.clear();
   state.settings = null;
   state.settingsDirty = false;
   state.overview = null;
@@ -302,6 +305,11 @@ async function switchTenant(id) {
     $('#tenant-selector').value = state.tenantId;
     syncSelects();
     toast('تا پایان ذخیره یا ارسال، تغییر فضا امکان‌پذیر نیست.', true);
+    return;
+  }
+  if (id !== state.tenantId && !window.RelayAutomation.canLeave(() => handleLoad(() => switchTenant(id)))) {
+    $('#tenant-selector').value = state.tenantId;
+    syncSelects();
     return;
   }
   if (!state.tenants.some(tenant => tenant.id === id)) throw new Error('فضای انتخاب‌شده وجود ندارد.');
@@ -433,6 +441,7 @@ async function loadApplications() {
 }
 
 function renderApplications() {
+  window.RelayAutomation.applicationsChanged(state.applications);
   text('#applications-count', `${count(state.applications.length)} اپلیکیشن در فضای ${selectedTenant()?.name || 'انتخاب‌شده'}`);
   const composerValue = $('#compose-app').value, filterValue = $('#application-filter').value;
   const active = state.applications.filter(application => application.enabled);
@@ -1172,7 +1181,10 @@ async function loadSubscribers(showLoading = true) {
       const toggle = node('button', 'text-button subscriber-ban-action', subscriber.banned ? 'رفع مسدودیت' : 'مسدود کردن');
       toggle.type = 'button';
       toggle.addEventListener('click', () => setSubscriberBan([String(subscriber.chatId)], !subscriber.banned));
-      buttons.append(manage, toggle);
+      const delivery = node('button', 'text-button', 'قوانین دریافت');
+      delivery.type = 'button';
+      delivery.addEventListener('click', () => window.RelayAutomation.preferences(String(subscriber.chatId)));
+      buttons.append(manage, delivery, toggle);
       actions.append(buttons);
       row.append(selection, td, id, status, access, timeCell(subscriber.joinedAt), timeCell(subscriber.updatedAt), actions);
       tbody.append(row);
@@ -1511,6 +1523,7 @@ async function refresh({initial = false, manual = false} = {}) {
     if (manual && state.tab === 'tenants') tasks.push(loadTenants());
     if (state.tab === 'notifications') tasks.push(loadNotifications(initial || manual));
     if (state.tab === 'subscribers') tasks.push(loadSubscribers(initial || manual));
+    if (['incidents', 'automation'].includes(state.tab)) tasks.push(initial ? window.RelayAutomation.activate(state.tab) : window.RelayAutomation.refresh({manual}));
     if (initial) tasks.push(api('/api/admin/context').then(context => {
       if (!state.authenticated) return;
       const ip = node('span', '', 'IP درخواست فعلی: ');
@@ -1634,6 +1647,7 @@ async function loadLoginAudit(reset = false) {
 
 function changeTab(tab, focus = false) {
   if (!Object.hasOwn(titles, tab)) tab = 'overview';
+  if (tab !== state.tab && !window.RelayAutomation.canLeave(() => changeTab(tab, focus))) return;
   state.tab = tab;
   $$('.nav-item[role=tab]').forEach(button => {
     const active = button.dataset.tab === tab;
@@ -1659,6 +1673,7 @@ function changeTab(tab, focus = false) {
   if (tab === 'api') updateApiExample();
   if (tab === 'notifications') handleLoad(() => loadNotifications());
   if (tab === 'subscribers') handleLoad(() => loadSubscribers());
+  if (['incidents', 'automation'].includes(tab)) handleLoad(() => window.RelayAutomation.activate(tab));
   if (tab === 'settings' && !state.settings) handleLoad(async () => renderSettings(await api('/api/admin/settings')));
 }
 
@@ -2114,6 +2129,7 @@ $$('[data-go-history]').forEach(button => button.addEventListener('click', () =>
 $$('[data-compose]').forEach(button => button.addEventListener('click', openComposer));
 
 function requestDialogClose(dialog) {
+  if (!window.RelayAutomation.canClose(dialog)) return;
   if (dialog.id === 'subscriber-profile-dialog' && subscriberEditor.saving || dialog.id === 'application-dialog' && applicationAudience.saving) return;
   dialog.close();
 }
@@ -2317,6 +2333,7 @@ function updateApiExample() {
   text('#api-status-example', statusExample);
 }
 
+window.RelayAutomation.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects});
 updateApiExample();
 for (const [selector, getExample] of [['#copy-example', () => curlExample], ['#copy-status-example', () => statusExample]]) {
   $(selector).addEventListener('click', async () => {
@@ -2338,7 +2355,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.authenticated) refresh();
 });
 window.setInterval(() => {
-  if (!document.hidden && state.authenticated && ['overview', 'notifications', 'subscribers'].includes(state.tab)) refresh();
+  if (!document.hidden && state.authenticated && ['overview', 'notifications', 'subscribers', 'incidents'].includes(state.tab)) refresh();
 }, 30000);
 (async () => {
   try {

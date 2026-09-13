@@ -10,6 +10,9 @@ Each **tenant** has its own bot, applications, subscribers, limits, and reports.
 - Admin-only failed-login audit with IP, country, time, and client details.
 - Telegram application subscriptions: receive everything by default, or choose specific apps.
 - Persistent delivery queues and reports in SQLite Durable Objects, with caching to reduce database reads.
+- Incident grouping, occurrence counts, Telegram acknowledgment/snooze/resolve actions, and ordered escalation.
+- Tenant defaults and application-specific delivery rules, with a preview of each routing decision.
+- Recipient level/environment preferences, time-zone-aware quiet hours, and periodic digests.
 
 ## Deploy to Cloudflare
 
@@ -109,6 +112,14 @@ Keep sending the same JSON fields. Text, titles, and metadata remain literal con
 
 The renderer uses the [Telegram Bot API's Rich Messages and buttons](https://core.telegram.org/bots/api#sendrichmessage). Telegram describes rendering in [supported clients](https://core.telegram.org/bots/features#messages-and-formatting), but does not document a minimum client version or guarantee an automatic fallback for older clients.
 
+### Incident response and delivery rules
+
+Open **قوانین ارسال** to enable grouping, configure responders and escalation, and define ordered delivery rules for the selected tenant or application. **مرکز رخدادها** shows active incidents and their action history. Recipient preferences control levels, environments, quiet hours, and digests.
+
+Grouping, escalation, quiet hours, and digests are opt-in. To correlate an alert with its resolution, send the same `fingerprint` with `incidentStatus: "firing"` and later `incidentStatus: "resolved"`. Keep `Idempotency-Key` for retrying one unchanged request.
+
+See the [incident and delivery-rules guide](docs/automation.md) for setup, payload examples, precedence, and administration endpoints.
+
 ## Subscriber controls
 
 | Telegram command | Action |
@@ -117,6 +128,8 @@ The renderer uses the [Telegram Bot API's Rich Messages and buttons](https://cor
 | `/apps` | Choose which permitted applications to receive |
 | `/all` | Receive notifications from every permitted application |
 | `/stop` | Stop receiving notifications |
+| `/preferences` | Configure your delivery preferences |
+| `/timezone Asia/Tehran` | Set the time zone for your quiet hours |
 
 New and existing subscribers initially have access to all current and future applications. In **Subscribers**, admins can edit a display-name override, private notes, and the applications each subscriber may receive. These changes preserve the Telegram name, username, and chat ID. Clearing the display name restores the Telegram name.
 

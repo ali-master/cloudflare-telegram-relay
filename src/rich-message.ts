@@ -1,10 +1,11 @@
 import type {NotificationInput, SourceContext} from './types';
+import type {Incident} from './automation';
 
 // The subset of Bot API 10.3 blocks used by the notification template.
 // https://core.telegram.org/bots/api#inputrichmessage
 export type RichText = string | RichText[] | { type: 'bold' | 'code'; text: string };
-export type RichMessageButton = { text: string; style?: 'primary' } & (
-  { url: string; copy_text?: never } | { copy_text: { text: string }; url?: never }
+export type RichMessageButton = { text: string; style?: 'primary' | 'success' | 'danger' } & (
+  { url: string; copy_text?: never; callback_data?: never } | { copy_text: { text: string }; url?: never; callback_data?: never } | {callback_data: string; url?: never; copy_text?: never}
   );
 export type InputRichBlock =
   | { type: 'paragraph'; text: RichText }
@@ -92,6 +93,7 @@ export function formatRichNotification(
   source?: SourceContext,
   showCountryFlag = false,
   notificationId?: string,
+  incident?: Incident,
 ): InputRichMessage {
   const level = LEVELS[input.level];
   const dates = notificationDates(input.timestamp);
@@ -104,6 +106,19 @@ export function formatRichNotification(
     {type: 'paragraph', text: input.text},
     technicalSection('CONTEXT', context),
   ];
+  if (incident) {
+    blocks.splice(2, 0, technicalSection('INCIDENT', [
+      ['status', incident.status], ['occurrences', String(incident.occurrences)],
+      ['first seen', incident.firstSeenAt], ['last seen', incident.lastSeenAt],
+      ...(incident.assigneeChatId ? [['owner', incident.assigneeChatId] as [string, string]] : []),
+      ...(incident.snoozedUntil ? [['snoozed to', incident.snoozedUntil] as [string, string]] : []),
+    ]));
+    if (incident.status !== 'resolved') blocks.push({type: 'buttons', align: 'right', buttons: [
+      {text: 'Acknowledge', style: 'primary', callback_data: `inc:ack:${incident.id}`},
+      {text: 'Snooze 15m', callback_data: `inc:snooze:${incident.id}`},
+      {text: 'Resolve', style: 'success', callback_data: `inc:resolve:${incident.id}`},
+    ]});
+  }
   if (input.image) blocks.push({type: 'photo', photo: {type: 'photo', media: input.image}});
   const [persianDay] = dates.persian.split(' · ');
   const [gregorianDay, time] = dates.gregorian.split(' · ');
@@ -125,5 +140,18 @@ export function formatRichNotification(
   const actions: RichMessageButton[] = [{text: 'کپی رویداد', copy_text: {text: input.event}}];
   if (notificationId) actions.push({text: 'کپی شناسه', copy_text: {text: notificationId}});
   blocks.push({type: 'buttons', align: 'right', buttons: actions});
+  return {blocks, is_rtl: false, skip_entity_detection: true};
+}
+
+/** A bounded digest retains literal event titles and identifiers, with no themed pre backgrounds. */
+export function formatRichDigest(items: Array<{input: NotificationInput; incident?: Incident}>, timestamp: string): InputRichMessage {
+  const blocks: InputRichBlock[] = [{type: 'heading', size: 3, text: `📬 Notification digest · ${items.length}`}];
+  for (const {input, incident} of items.slice(0, 20)) {
+    blocks.push({type: 'paragraph', text: ['\n', {type: 'bold', text: `${LEVELS[input.level].icon} ${input.application} · ${input.title || input.event}`}, '\n', {type: 'code', text: `${input.level} · ${input.environment || 'all environments'}${incident ? ` · ${incident.occurrences} occurrences` : ''}`}, '\n', input.text.slice(0, 300)]});
+    if (input.url) blocks.push({type: 'buttons', align: 'right', buttons: [{text: 'View details ↗', url: input.url}]});
+    if (incident && incident.status !== 'resolved') blocks.push({type: 'buttons', align: 'right', buttons: [{text: 'Acknowledge', callback_data: `inc:ack:${incident.id}`}, {text: 'Resolve', style: 'success', callback_data: `inc:resolve:${incident.id}`} ]});
+  }
+  const dates = notificationDates(timestamp);
+  blocks.push(technicalSection('DELIVERED', [['jalali', dates.persian], ['gregorian', dates.gregorian], ['zone', NOTIFICATION_TIME_ZONE]]));
   return {blocks, is_rtl: false, skip_entity_detection: true};
 }

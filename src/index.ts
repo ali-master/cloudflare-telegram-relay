@@ -197,6 +197,32 @@ adminData.get('/context', c => c.json(sourceContext(c.req.raw, 'admin')));
 adminData.get('/overview', async c => c.json(await hub(c).getOverview()));
 adminData.get('/settings', async c => c.json(await hub(c).getSettings()));
 adminData.put('/settings', async c => c.json(await hub(c).updateSettings(settingsInput(await jsonBody(c), await hub(c).getSettings()))));
+adminData.get('/automation', async c => c.json(await hub(c).getAutomationPolicy(c.req.query('applicationId') || undefined)));
+adminData.put('/automation', async c => c.json(await hub(c).updateAutomationPolicy(c.req.query('applicationId') || null, object(await jsonBody(c)))));
+adminData.delete('/automation', async c => {
+  const applicationId = c.req.query('applicationId');
+  const version = c.req.query('expectedVersion');
+  if (!applicationId || !version || !/^\d+$/.test(version) || !Number.isSafeInteger(Number(version))) {
+    throw new AppError(400, 'INVALID_AUTOMATION', 'اپلیکیشن و نسخهٔ تنظیمات را مشخص کنید.');
+  }
+  return c.json(await hub(c).resetAutomationPolicy(applicationId, Number(version)));
+});
+adminData.post('/automation/preview', async c => c.json(await hub(c).previewDelivery(object(await jsonBody(c)))));
+adminData.get('/incidents/overview', async c => c.json(await hub(c).getIncidentOverview()));
+adminData.get('/incidents', async c => {
+  const status = c.req.query('status') || undefined;
+  if (status && !['open', 'acknowledged', 'snoozed', 'resolved'].includes(status)) {
+    throw new AppError(400, 'INVALID_INCIDENT', 'وضعیت رخداد معتبر نیست.');
+  }
+  return c.json(await hub(c).listIncidents(pageNumber(c.req.query('page')), status, c.req.query('applicationId') || undefined));
+});
+adminData.get('/incidents/:id', async c => {
+  const result = await hub(c).getIncident(c.req.param('id'));
+  return result ? c.json(result) : failure(c, 404, 'INCIDENT_NOT_FOUND', 'رخداد پیدا نشد.');
+});
+adminData.post('/incidents/:id/actions', async c => c.json(await hub(c).actOnIncident(c.req.param('id'), object(await jsonBody(c)))));
+adminData.get('/subscribers/:chatId/preferences', async c => c.json({preferences: await hub(c).getSubscriberPreferences(c.req.param('chatId'))}));
+adminData.put('/subscribers/:chatId/preferences', async c => c.json({preferences: await hub(c).updateSubscriberPreferences(c.req.param('chatId'), object(await jsonBody(c)))}));
 adminData.get('/subscribers', async c => c.json(await hub(c).listSubscribers(pageNumber(c.req.query('page')), c.req.query('search'))));
 adminData.get('/subscribers/:chatId', async c => {
   const subscriber = await hub(c).getSubscriber(c.req.param('chatId'));
@@ -346,6 +372,19 @@ app.onError((error, c) => {
     INVALID_SUBSCRIBER: [400, 'اطلاعات کاربر یا اپلیکیشن‌های انتخاب‌شده معتبر نیست.'],
     STALE_SUBSCRIBER: [409, 'اطلاعات کاربر تغییر کرده است؛ نسخهٔ جدید را بارگیری کنید.'],
     INVALID_BAN: [400, 'درخواست مسدودسازی معتبر نیست.'],
+    INVALID_AUTOMATION: [400, 'تنظیمات تجمیع، ارجاع یا قوانین ارسال معتبر نیست.'],
+    VALIDATION_ERROR: [400, 'اطلاعات واردشده معتبر نیست؛ مقادیر و محدودیت فیلدها را بررسی کنید.'],
+    VERSION_CONFLICT: [409, 'اطلاعات تغییر کرده است؛ نسخهٔ جدید را بارگیری کنید و دوباره ذخیره کنید.'],
+    INVALID_TIMEZONE_TRANSITION: [400, 'زمان پایان سکوت در منطقهٔ زمانی انتخاب‌شده قابل محاسبه نیست.'],
+    STALE_AUTOMATION: [409, 'قوانین ارسال تغییر کرده‌اند؛ نسخهٔ جدید را بارگیری کنید.'],
+    INVALID_PREFERENCES: [400, 'ترجیحات دریافت یا منطقهٔ زمانی معتبر نیست.'],
+    STALE_PREFERENCES: [409, 'ترجیحات دریافت تغییر کرده‌اند؛ نسخهٔ جدید را بارگیری کنید.'],
+    INVALID_INCIDENT: [400, 'درخواست رسیدگی به رخداد معتبر نیست.'],
+    INVALID_AUTOMATION_PREVIEW: [400, 'نمونهٔ پیش‌نمایش معتبر نیست؛ اپلیکیشن، کاربر و سطح را بررسی کنید.'],
+    INCIDENT_NOT_FOUND: [404, 'رخداد پیدا نشد.'],
+    STALE_INCIDENT: [409, 'وضعیت رخداد تغییر کرده است؛ نسخهٔ جدید را بارگیری کنید.'],
+    INCIDENT_RESOLVED: [409, 'این رخداد قبلاً بسته شده است.'],
+    INCIDENT_FORBIDDEN: [403, 'دسترسی رسیدگی به این رخداد را ندارید.'],
     DAILY_LIMIT: [429, 'سهمیه اعلان روزانه این Tenant پر شده است.'],
     SUBSCRIBER_LIMIT: [429, 'ظرفیت اعضای این Tenant پر شده است.'],
     QUEUE_LIMIT: [429, 'ظرفیت صف ارسال این Tenant پر شده است.'],

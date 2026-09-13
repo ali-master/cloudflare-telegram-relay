@@ -15,7 +15,9 @@
     <link rel="stylesheet" href="/selects.css">
     <link rel="stylesheet" href="/audit.css">
     <link rel="stylesheet" href="/api-guide.css">
+    <link rel="stylesheet" href="/automation.css">
     <script src="/selects.js" defer></script>
+    <script src="/automation.js" defer></script>
     <script src="/app.js" defer></script>
 </head>
 <body>
@@ -198,6 +200,8 @@
                     <use href="#i-activity"/>
                 </svg>
                 <span>اعلان‌ها</span></button>
+            <button id="tab-incidents" class="nav-item" type="button" role="tab" aria-selected="false" aria-controls="panel-incidents" tabindex="-1" data-tab="incidents"><svg class="icon"><use href="#i-alert"/></svg><span>مرکز رخدادها</span></button>
+            <button id="tab-automation" class="nav-item" type="button" role="tab" aria-selected="false" aria-controls="panel-automation" tabindex="-1" data-tab="automation"><svg class="icon"><use href="#i-settings"/></svg><span>قوانین ارسال</span></button>
             <button id="tab-subscribers" class="nav-item" type="button" role="tab" aria-selected="false"
                     aria-controls="panel-subscribers" tabindex="-1" data-tab="subscribers">
                 <svg class="icon">
@@ -803,6 +807,27 @@
                         </table>
                     </div>
                 </article>
+                <article class="card api-guide-section">
+                    <div class="card-header"><div><h2>از هشدار تا رفع مشکل</h2><p>یک شناسهٔ ثابت برای یک مشکل؛ یک پیام قابل پیگیری در تلگرام.</p></div><button type="button" class="text-button" data-api-tab="automation">قوانین ارسال ←</button></div>
+                    <div class="api-response-body"><p>تجمیع را در «قوانین ارسال» فعال کنید. این دو بدنه را با همان کلید اپلیکیشن، به مسیر ارسال همین Tenant بفرستید. مقدار <bdi>fingerprint</bdi> در تکرارها و پیام رفع مشکل ثابت می‌ماند؛ برای هر رویداد تازه، <bdi>Idempotency-Key</bdi> تازه بسازید.</p>
+                        <div class="api-grid api-incident-examples"><div><strong>۱. ثبت یا تکرار مشکل</strong><pre tabindex="0" dir="ltr">{
+  "event": "service.unavailable",
+  "text": "The API is unavailable.",
+  "level": "critical",
+  "environment": "production",
+  "fingerprint": "api:production:unavailable",
+  "incidentStatus": "firing"
+}</pre></div><div><strong>۲. بستن همان رخداد</strong><pre tabindex="0" dir="ltr">{
+  "event": "service.recovered",
+  "text": "The API has recovered.",
+  "level": "success",
+  "environment": "production",
+  "fingerprint": "api:production:unavailable",
+  "incidentStatus": "resolved"
+}</pre></div></div>
+                        <p>تکرارها در بازهٔ تنظیم‌شده، شمارندهٔ همان رخداد را بالا می‌برند؛ <bdi>resolved</bdi> رخداد باز متناظر را می‌بندد. اتصال‌های Grafana و Alertmanager وضعیت رفع مشکل را خودکار نگاشت می‌کنند. <button type="button" class="text-button" data-api-tab="incidents">مشاهدهٔ مرکز رخدادها ←</button></p>
+                    </div>
+                </article>
                 <div class="api-track-grid api-guide-section">
                     <article class="card api-example">
                         <div class="card-header">
@@ -983,6 +1008,8 @@
                                     با قلم ثابت و مقادیر کامل نمایش داده می‌شوند.
                                 </td>
                             </tr>
+                            <tr><td><code>fingerprint</code></td><td>string</td><td>شناسهٔ ثابت مشکل، حداکثر ۱۶۰ کاراکتر. در تکرارها و رخداد رفع مشکل همان مقدار را بفرستید؛ گروه‌بندی برای هر اپلیکیشن مستقل است.</td></tr>
+                            <tr><td><code>incidentStatus</code></td><td>enum</td><td><bdi>firing</bdi> برای رخداد فعال و <bdi>resolved</bdi> برای رفع مشکل. بدون این فیلد، پیام به‌عنوان رخداد فعال بررسی می‌شود.</td></tr>
                             <tr>
                                 <td><code>silent</code></td>
                                 <td>boolean</td>
@@ -1137,6 +1164,32 @@
                     <span>غیرفعال کردن فضا، دریافت و ارسال اعلان‌های آن را متوقف می‌کند. داده‌های قبلی باقی می‌مانند و پس از فعال‌سازی دوباره قابل استفاده‌اند.</span>
                 </div>
             </section>
+            <section id="panel-incidents" role="tabpanel" aria-labelledby="tab-incidents" class="panel automation-panel" hidden>
+                <div class="auto-hero"><div><span class="eyebrow">LESS NOISE. MORE CONTEXT.</span><h1>یک رخداد، یک مسیر رسیدگی.</h1><p>تکرارها را یک‌جا ببینید، مسئول رسیدگی را بشناسید و تا رفع مشکل همراه هشدار بمانید.</p></div><div class="auto-orbit" aria-hidden="true"><svg class="icon"><use href="#i-activity"/></svg></div></div>
+                <div class="auto-stats" id="incident-stats" aria-live="polite"></div>
+                <article class="card">
+                    <div class="auto-toolbar"><div class="auto-filters" aria-label="فیلتر وضعیت رخداد"><button type="button" class="auto-filter" data-incident-status="" aria-pressed="true">همه</button><button type="button" class="auto-filter" data-incident-status="open" aria-pressed="false">باز</button><button type="button" class="auto-filter" data-incident-status="acknowledged" aria-pressed="false">در حال رسیدگی</button><button type="button" class="auto-filter" data-incident-status="snoozed" aria-pressed="false">تعویق‌یافته</button><button type="button" class="auto-filter" data-incident-status="resolved" aria-pressed="false">رفع‌شده</button></div><label class="inline-label" for="incident-app-filter">اپلیکیشن<select id="incident-app-filter"><option value="">همهٔ اپلیکیشن‌ها</option></select></label></div>
+                    <p id="incidents-error" class="form-error" role="alert" hidden></p><div id="incident-list" class="incident-list" aria-live="polite"></div><div id="incident-pagination" class="pagination"></div>
+                </article>
+                <div class="content-footer"><span>رخدادهای مشابه با تنظیمات تجمیع همین فضا دسته‌بندی می‌شوند.</span><button type="button" class="text-button" data-api-tab="automation">تنظیم قوانین ارسال ←</button></div>
+            </section>
+            <section id="panel-automation" role="tabpanel" aria-labelledby="tab-automation" class="panel automation-panel" hidden>
+                <div class="auto-hero"><div><span class="eyebrow">THE RIGHT SIGNAL. THE RIGHT MOMENT.</span><h1>هر پیام، به‌وقت خودش.</h1><p>هشدارهای تکراری را جمع کنید، مسئول بعدی را مشخص کنید و برای پیام‌های کم‌اهمیت، زمان مناسبی بسازید.</p></div><div class="auto-orbit" aria-hidden="true"><svg class="icon"><use href="#i-relay"/></svg></div></div>
+                <div class="auto-scope"><div class="field"><label for="automation-scope">این قوانین برای</label><select id="automation-scope"><option value="">پیش‌فرض تمام اپلیکیشن‌های فضا</option></select></div><div class="auto-scope-note"><span id="automation-inheritance" class="badge neutral">پیش‌فرض فضا</span><p id="automation-scope-note">اپلیکیشن‌ها می‌توانند قوانین اختصاصی داشته باشند.</p></div><button id="automation-reset" type="button" class="button secondary small-button" hidden>بازگشت به قوانین فضا</button></div>
+                <div id="automation-loading" class="auto-loading" role="status"></div><p id="automation-error" class="form-error" role="alert" hidden></p>
+                <div id="automation-content" class="auto-layout" hidden>
+                    <form id="automation-form" class="auto-main">
+                        <section class="auto-card"><div class="auto-card-head"><div class="auto-card-title"><span class="auto-step">01</span><div><h2>از تکرار تا یک رخداد</h2><p>برای هشدارهای مشابه، یک شمارنده و یک سابقهٔ پیوسته.</p></div></div><label class="auto-check"><input id="auto-group-enabled" type="checkbox">تجمیع فعال</label></div><div class="auto-inline-fields"><div class="field"><label for="auto-group-window">بازهٔ تشخیص تکرار · ثانیه</label><input id="auto-group-window" type="number" min="30" max="86400" value="300" required dir="ltr"><small class="auto-field-note">از ۳۰ ثانیه تا ۲۴ ساعت؛ پیشنهاد: ۳۰۰ ثانیه.</small></div><div class="field"><p>رخداد مشابه در این بازه، همان پیام را با تعداد تکرار تازه به‌روزرسانی می‌کند. رخداد رفع مشکل، مسیر رسیدگی را می‌بندد.</p></div></div></section>
+                        <section class="auto-card"><div class="auto-card-head"><div class="auto-card-title"><span class="auto-step">02</span><div><h2>مسئول مشخص، پیگیری خودکار</h2><p>افراد مجاز به رسیدگی و ترتیب اطلاع‌رسانی بعدی.</p></div></div></div><div class="auto-title-actions"><strong>تیم پاسخ‌گو</strong><button type="button" id="auto-add-responder" class="text-button">+ انتخاب مشترک</button></div><div id="auto-responders" class="auto-roster"></div><hr class="auto-divider"><label class="auto-check"><input id="auto-escalation-enabled" type="checkbox">اگر پاسخ نرسید، به نفر بعدی اطلاع بده</label><div class="field"><label for="auto-escalation-delay">فاصلهٔ هر مرحله · دقیقه</label><input id="auto-escalation-delay" type="number" min="1" max="1440" value="5" required dir="ltr"></div><div id="auto-escalation-targets" class="auto-roster"></div><button type="button" id="auto-add-escalation" class="button secondary small-button">+ افزودن به مسیر پیگیری</button><small class="auto-field-note">ترتیب افراد، ترتیب پیگیری است. با پذیرش مسئولیت یا رفع مشکل، پیگیری متوقف می‌شود.</small></section>
+                        <section class="auto-card"><div class="auto-card-head"><div class="auto-card-title"><span class="auto-step">03</span><div><h2>قانون‌های کوچک، آرامش بیشتر</h2><p>اولین قانون منطبق تصمیم می‌گیرد؛ ترتیب را با فلش‌ها تغییر دهید.</p></div></div><span id="auto-rules-count" class="badge neutral">۰ قانون</span></div><div class="auto-presets" aria-label="افزودن الگوی قانون"><button type="button" class="auto-preset" data-rule-preset="critical">⚡ بحرانی‌ها فوری</button><button type="button" class="auto-preset" data-rule-preset="staging">◷ خلاصهٔ ساعتی staging</button><button type="button" class="auto-preset" data-rule-preset="maintenance">☾ سکوت برچسب maintenance</button></div><div id="auto-rules"></div><button type="button" id="auto-add-rule" class="button secondary full">+ ساخت قانون جدید</button><small class="auto-field-note">فیلتر خالی یعنی همه. اگر قانونی منطبق نشود، ترجیحات مشترک تعیین‌کننده است.</small></section>
+                        <div class="auto-save-bar" id="auto-save-bar"><div><strong id="auto-save-state">قوانین فعال</strong><small id="auto-save-note">تغییرات پس از ذخیره اعمال می‌شوند.</small></div><div class="auto-save-actions"><button type="button" id="auto-reload" class="button secondary">بازخوانی</button><button type="submit" id="auto-save" class="button primary" disabled>ذخیرهٔ قوانین</button></div></div>
+                    </form>
+                    <aside class="auto-aside">
+                        <form id="automation-preview-form" class="auto-card auto-preview"><div class="auto-card-head"><div><span class="eyebrow muted">DELIVERY LAB</span><h2>پیش از ارسال، مسیر را ببینید</h2><p>تصمیم واقعی با قوانین ذخیره‌شده؛ بدون ارسال پیام.</p></div></div><div class="field"><label for="auto-preview-app">اپلیکیشن</label><select id="auto-preview-app" required></select></div><div class="field"><label for="auto-preview-chat">مشترک · اختیاری</label><input id="auto-preview-chat" type="text" inputmode="numeric" maxlength="30" placeholder="شناسهٔ چت" dir="ltr"><button type="button" id="auto-preview-pick" class="text-button">انتخاب از مشترکان</button></div><div class="field"><label for="auto-preview-level">سطح پیام</label><select id="auto-preview-level"><option value="info">Info</option><option value="success">Success</option><option value="warning">Warning</option><option value="error" selected>Error</option><option value="critical">Critical</option></select></div><div class="field"><label for="auto-preview-env">محیط</label><input id="auto-preview-env" maxlength="80" value="production" dir="ltr"></div><div class="field"><label for="auto-preview-tags">برچسب‌ها · جداشده با ویرگول</label><input id="auto-preview-tags" maxlength="1000" placeholder="release, backend" dir="ltr"></div><button type="submit" id="auto-preview-run" class="button secondary full">بررسی مسیر پیام ←</button><div id="auto-preview-result" class="auto-preview-result" role="status" hidden></div><p id="auto-preview-error" class="form-error" role="alert" hidden></p></form>
+                        <div class="auto-card"><h2>از رویداد تا مخاطب</h2><div class="auto-flow"><div class="auto-flow-row"><span>۱</span>دسترسی اپلیکیشن و عضویت</div><div class="auto-flow-line"></div><div class="auto-flow-row"><span>۲</span>قوانین فضا یا اپلیکیشن</div><div class="auto-flow-line"></div><div class="auto-flow-row"><span>۳</span>ترجیحات و ساعت سکوت مشترک</div><div class="auto-flow-line"></div><div class="auto-flow-row"><span>۴</span>ارسال فوری یا خلاصهٔ زمان‌بندی‌شده</div></div><p class="auto-helper">هر مشترک از بخش «مشترکان ← قوانین دریافت» تنظیمات خودش را دارد؛ سطح‌ها، محیط‌ها، منطقهٔ زمانی و ساعت سکوت.</p></div>
+                    </aside>
+                </div>
+            </section>
             <section id="panel-login-audit" role="tabpanel" aria-labelledby="tab-login-audit" class="panel" hidden>
                 <div class="page-heading">
                     <div><span class="eyebrow muted">DASHBOARD ACCESS LOG</span>
@@ -1182,6 +1235,10 @@
         </main>
     </div>
 </div>
+<dialog id="incident-dialog" class="modal auto-modal" aria-labelledby="incident-dialog-title"><div class="modal-heading"><div><span class="eyebrow muted">INCIDENT JOURNEY</span><h2 id="incident-dialog-title">مسیر رسیدگی به رخداد</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="بستن رخداد"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="incident-detail" class="auto-modal-body"></div><p id="incident-action-error" class="form-error" role="alert" hidden></p></dialog>
+<dialog id="delivery-preferences-dialog" class="modal auto-modal" aria-labelledby="delivery-preferences-title"><div class="modal-heading"><div><span class="eyebrow muted">PERSONAL SIGNAL</span><h2 id="delivery-preferences-title">قوانین دریافت مشترک</h2><p id="delivery-preferences-person"></p></div><button type="button" class="icon-button" data-close-dialog aria-label="بستن قوانین دریافت"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="delivery-preferences-loading" role="status"></div><form id="delivery-preferences-form" hidden><div class="auto-preferences-grid"><section class="auto-card"><h3>چه پیام‌هایی برسند؟</h3><label>سطح‌های مجاز</label><div id="delivery-levels" class="auto-choices"></div><p id="delivery-levels-warning" class="auto-inline-warning" hidden>هیچ سطحی انتخاب نشده؛ تمام اعلان‌ها برای این مشترک متوقف می‌شوند.</p><div class="field"><label for="delivery-environments">محیط‌ها · جداشده با ویرگول</label><input id="delivery-environments" maxlength="1600" placeholder="production, staging" dir="ltr"><small class="auto-field-note">خالی بگذارید تا همهٔ محیط‌ها مجاز باشند.</small></div><div class="field"><label for="delivery-mode">شیوهٔ دریافت</label><select id="delivery-mode"><option value="immediate">به‌محض رخداد</option><option value="digest">در یک خلاصهٔ دوره‌ای</option></select></div><div class="field" id="delivery-digest-field"><label for="delivery-digest-minutes">فاصلهٔ خلاصه‌ها · دقیقه</label><input id="delivery-digest-minutes" type="number" min="5" max="1440" value="60" required dir="ltr"></div></section><section class="auto-card"><h3>چه زمانی برسند؟</h3><div class="field"><label for="delivery-timezone">منطقهٔ زمانی</label><input id="delivery-timezone" list="delivery-timezones" value="Asia/Tehran" maxlength="100" required dir="ltr"><datalist id="delivery-timezones"><option value="Asia/Tehran"><option value="UTC"><option value="Europe/London"><option value="Europe/Berlin"><option value="Asia/Dubai"><option value="America/New_York"></datalist></div><hr class="auto-divider"><label class="auto-check"><input id="delivery-quiet-enabled" type="checkbox">ساعت سکوت</label><div class="auto-inline-fields"><div class="field"><label for="delivery-quiet-start">از ساعت</label><input id="delivery-quiet-start" type="time" value="22:00" required></div><div class="field"><label for="delivery-quiet-end">تا ساعت</label><input id="delivery-quiet-end" type="time" value="08:00" required></div></div><small class="auto-field-note">در زمان سکوت، اعلان‌های مجاز تا پایان بازه منتظر می‌مانند.</small><hr class="auto-divider"><label class="auto-check"><input id="delivery-critical-bypass" type="checkbox" checked>Critical از سکوت و خلاصه عبور کند</label><small class="auto-field-note">مجوز اپلیکیشن و سطح‌های انتخاب‌شده همچنان رعایت می‌شوند.</small></section></div><div class="auto-preference-summary"><svg class="icon"><use href="#i-clock"/></svg><p id="delivery-preferences-summary"></p></div><p class="auto-helper">این ترجیحات با تنظیمات تلگرام مشترک هماهنگ است؛ <code dir="ltr">/preferences</code> برای مدیریت دریافت و <code dir="ltr">/timezone</code> برای منطقهٔ زمانی.</p><p id="delivery-preferences-error" class="form-error" role="alert" hidden></p><div class="modal-footer"><button type="button" id="delivery-preferences-reload" class="button secondary">بازخوانی</button><button type="button" class="button secondary" data-close-dialog>بستن</button><button type="submit" id="delivery-preferences-save" class="button primary">ذخیرهٔ ترجیحات</button></div></form></dialog>
+<dialog id="auto-people-dialog" class="modal auto-people-dialog" aria-labelledby="auto-people-title"><div class="modal-heading"><div><span class="eyebrow muted">YOUR PEOPLE</span><h2 id="auto-people-title">انتخاب از مشترکان</h2><p>جست‌وجوی نام، نام کاربری یا شناسهٔ چت.</p></div><button type="button" class="icon-button" data-close-dialog aria-label="بستن انتخاب مشترک"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="search-field"><svg class="icon"><use href="#i-search"/></svg><input id="auto-people-search" type="search" placeholder="جست‌وجوی مشترک…" aria-label="جست‌وجوی مشترک" maxlength="100"></div><div id="auto-people-list" class="auto-roster"></div><div id="auto-people-pagination" class="pagination"></div><p id="auto-people-error" class="form-error" role="alert" hidden></p></dialog>
+<dialog id="auto-discard-dialog" class="modal auto-discard-dialog" aria-labelledby="auto-discard-title"><span class="eyebrow muted">UNSAVED CHANGES</span><h2 id="auto-discard-title">تغییرات هنوز ذخیره نشده‌اند</h2><p>با ادامه، تغییرات ذخیره‌نشدهٔ این بخش کنار گذاشته می‌شوند.</p><div class="modal-footer"><button type="button" id="auto-discard-cancel" class="button primary">ادامهٔ ویرایش</button><button type="button" id="auto-discard-confirm" class="button secondary">کنار گذاشتن و ادامه</button></div></dialog>
 <dialog id="subscriber-profile-dialog" class="modal subscriber-profile" aria-labelledby="subscriber-profile-heading">
     <div class="subscriber-profile-heading">
         <div><span class="eyebrow">SUBSCRIBER ACCESS</span>

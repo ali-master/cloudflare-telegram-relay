@@ -21,7 +21,7 @@ function safeUrl(value: unknown, field: string): string | undefined {
 }
 export function notificationInput(value: unknown, source: SourceContext): NotificationInput {
   const data = object(value);
-  const allowed = ['application', 'event', 'level', 'timestamp', 'text', 'title', 'image', 'url', 'environment', 'metadata', 'tags', 'silent'];
+  const allowed = ['application', 'event', 'level', 'timestamp', 'text', 'title', 'image', 'url', 'environment', 'metadata', 'tags', 'silent', 'fingerprint', 'incidentStatus'];
   for (const key of Object.keys(data)) if (!allowed.includes(key)) invalid(key);
   const level = data.level ?? 'info';
   if (!LEVELS.includes(level as never)) invalid('level');
@@ -38,6 +38,15 @@ export function notificationInput(value: unknown, source: SourceContext): Notifi
   };
   for (const [key, max] of [['title', 160], ['environment', 80]] as const) {
     const val = string(data[key], key, max, false); if (val) input[key] = val;
+  }
+  const fingerprint = string(data.fingerprint, 'fingerprint', 160, false);
+  if (fingerprint) {
+    if (/[\u0000-\u001f\u007f]/u.test(fingerprint)) invalid('fingerprint');
+    input.fingerprint = fingerprint;
+  }
+  if (data.incidentStatus !== undefined) {
+    if (data.incidentStatus !== 'firing' && data.incidentStatus !== 'resolved') invalid('incidentStatus');
+    input.incidentStatus = data.incidentStatus;
   }
   const url = safeUrl(data.url, 'url'); if (url) input.url = url;
   const image = string(data.image, 'image', 2048, false);

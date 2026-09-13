@@ -3194,7 +3194,784 @@ paths:
             type: "string"
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
+  /api/admin/tenants/{tenantId}/automation:
+    parameters:
+    - $ref: '#/components/parameters/AutomationTenantId'
+    - $ref: '#/components/parameters/AutomationApplicationId'
+    get:
+      operationId: getTenantAutomation
+      summary: Read effective automation policy
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read effective automation policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: updateTenantAutomation
+      summary: Update tenant defaults or an application override
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutomationPolicyUpdate'
+      responses:
+        '200':
+          description: Update tenant defaults or an application override
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: resetTenantAutomation
+      summary: Remove an application override and restore inheritance
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      description: Requires applicationId; tenant defaults cannot be deleted. Returned revision increases after reset.
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      - name: applicationId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 2
+          maxLength: 48
+        description: Omit for tenant policy; provide a tenant application for its effective policy/override.
+      - name: expectedVersion
+        in: query
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+          description: Version from latest GET. Stale writes return HTTP 409.
+      responses:
+        '200':
+          description: Remove an application override and restore inheritance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/tenants/{tenantId}/automation/preview:
+    parameters:
+    - $ref: '#/components/parameters/AutomationTenantId'
+    post:
+      operationId: previewTenantAutomation
+      summary: Simulate delivery without sending
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      description: Uses persisted effective policy/preferences and checks bans, active subscriptions and application access
+        when chatId is supplied.
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeliveryPreviewInput'
+      responses:
+        '200':
+          description: Simulate delivery without sending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryDecision'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/tenants/{tenantId}/incidents:
+    parameters:
+    - $ref: '#/components/parameters/AutomationTenantId'
+    get:
+      operationId: listTenantIncidents
+      summary: List retained tenant incidents
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: List retained tenant incidents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - open
+          - acknowledged
+          - snoozed
+          - resolved
+      - name: applicationId
+        in: query
+        schema:
+          type: string
+  /api/admin/tenants/{tenantId}/incidents/overview:
+    parameters:
+    - $ref: '#/components/parameters/AutomationTenantId'
+    get:
+      operationId: getTenantIncidentOverview
+      summary: Read incident counts and response-time metrics
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read incident counts and response-time metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentOverview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/tenants/{tenantId}/incidents/{id}:
+    parameters:
+    - $ref: '#/components/parameters/AutomationTenantId'
+    - $ref: '#/components/parameters/AutomationIncidentId'
+    get:
+      operationId: getTenantIncident
+      summary: Read an incident and its timeline
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read an incident and its timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/tenants/{tenantId}/incidents/{id}/actions:
+    parameters:
+    - $ref: '#/components/parameters/AutomationTenantId'
+    - $ref: '#/components/parameters/AutomationIncidentId'
+    post:
+      operationId: actOnTenantIncident
+      summary: Acknowledge, snooze, or resolve an incident
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      description: Records a dashboard action and schedules Telegram message updates. Actor identity cannot be forged in the
+        admin input; Telegram callbacks independently enforce responder permissions.
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentActionInput'
+      responses:
+        '200':
+          description: Acknowledge, snooze, or resolve an incident
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentActionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/tenants/{tenantId}/subscribers/{chatId}/preferences:
+    parameters:
+    - $ref: '#/components/parameters/AutomationTenantId'
+    - $ref: '#/components/parameters/AutomationSubscriberId'
+    get:
+      operationId: getTenantSubscriberPreferences
+      summary: Read subscriber delivery preferences
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read subscriber delivery preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriberPreferencesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: updateTenantSubscriberPreferences
+      summary: Update filters, quiet hours, and digest preferences
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriberPreferencesUpdate'
+      responses:
+        '200':
+          description: Update filters, quiet hours, and digest preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriberPreferencesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/automation:
+    parameters:
+    - $ref: '#/components/parameters/AutomationApplicationId'
+    get:
+      operationId: getDefaultAutomation
+      summary: Read effective automation policy
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read effective automation policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      description: Default-tenant alias.
+    put:
+      operationId: updateDefaultAutomation
+      summary: Update tenant defaults or an application override
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutomationPolicyUpdate'
+      responses:
+        '200':
+          description: Update tenant defaults or an application override
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      description: Default-tenant alias.
+    delete:
+      operationId: resetDefaultAutomation
+      summary: Remove an application override and restore inheritance
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      description: Requires applicationId; tenant defaults cannot be deleted. Returned revision increases after reset. Default-tenant
+        alias.
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      - name: applicationId
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 2
+          maxLength: 48
+        description: Omit for tenant policy; provide a tenant application for its effective policy/override.
+      - name: expectedVersion
+        in: query
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+          description: Version from latest GET. Stale writes return HTTP 409.
+      responses:
+        '200':
+          description: Remove an application override and restore inheritance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationPolicyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/automation/preview:
+    parameters: []
+    post:
+      operationId: previewDefaultAutomation
+      summary: Simulate delivery without sending
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      description: Uses persisted effective policy/preferences and checks bans, active subscriptions and application access
+        when chatId is supplied. Default-tenant alias.
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeliveryPreviewInput'
+      responses:
+        '200':
+          description: Simulate delivery without sending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryDecision'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/incidents:
+    parameters: []
+    get:
+      operationId: listDefaultIncidents
+      summary: List retained tenant incidents
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: List retained tenant incidents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - open
+          - acknowledged
+          - snoozed
+          - resolved
+      - name: applicationId
+        in: query
+        schema:
+          type: string
+      description: Default-tenant alias.
+  /api/admin/incidents/overview:
+    parameters: []
+    get:
+      operationId: getDefaultIncidentOverview
+      summary: Read incident counts and response-time metrics
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read incident counts and response-time metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentOverview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      description: Default-tenant alias.
+  /api/admin/incidents/{id}:
+    parameters:
+    - $ref: '#/components/parameters/AutomationIncidentId'
+    get:
+      operationId: getDefaultIncident
+      summary: Read an incident and its timeline
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read an incident and its timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      description: Default-tenant alias.
+  /api/admin/incidents/{id}/actions:
+    parameters:
+    - $ref: '#/components/parameters/AutomationIncidentId'
+    post:
+      operationId: actOnDefaultIncident
+      summary: Acknowledge, snooze, or resolve an incident
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      description: Records a dashboard action and schedules Telegram message updates. Actor identity cannot be forged in the
+        admin input; Telegram callbacks independently enforce responder permissions. Default-tenant alias.
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentActionInput'
+      responses:
+        '200':
+          description: Acknowledge, snooze, or resolve an incident
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentActionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/admin/subscribers/{chatId}/preferences:
+    parameters:
+    - $ref: '#/components/parameters/AutomationSubscriberId'
+    get:
+      operationId: getDefaultSubscriberPreferences
+      summary: Read subscriber delivery preferences
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      responses:
+        '200':
+          description: Read subscriber delivery preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriberPreferencesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      description: Default-tenant alias.
+    put:
+      operationId: updateDefaultSubscriberPreferences
+      summary: Update filters, quiet hours, and digest preferences
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriberPreferencesUpdate'
+      responses:
+        '200':
+          description: Update filters, quiet hours, and digest preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriberPreferencesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          $ref: '#/components/responses/AutomationConflict'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      description: Default-tenant alias.
 components:
+  parameters:
+    AutomationTenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 2
+        maxLength: 48
+    AutomationApplicationId:
+      name: applicationId
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 2
+        maxLength: 48
+      description: Omit for tenant policy; provide a tenant application for its effective policy/override.
+    AutomationOrigin:
+      name: Origin
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uri
+      description: Exact dashboard origin including scheme and port.
+    AutomationIncidentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AutomationSubscriberId:
+      name: chatId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^-?[0-9]{1,20}$
   securitySchemes:
     bearerAuth:
       type: "http"
@@ -3221,6 +3998,673 @@ components:
       name: "X-Telegram-Bot-Api-Secret-Token"
       description: "Selected tenant's private webhook secret. The default tenant may use TELEGRAM_WEBHOOK_SECRET until overridden."
   schemas:
+    AutomationLevel:
+      type: string
+      enum:
+      - info
+      - success
+      - warning
+      - error
+      - critical
+    IncidentFingerprint:
+      type: string
+      minLength: 1
+      maxLength: 160
+      description: Stable identity within the authenticated tenant and application; reuse for repeated/resolved notifications.
+        Control characters are rejected. If omitted, identity derives from event without trailing .firing/.resolved and environment.
+        Never grouped across tenants/apps.
+    IncidentStatus:
+      type: string
+      enum:
+      - firing
+      - resolved
+      description: Explicit lifecycle; resolved plus the same fingerprint resolves a matching open incident. Success severity
+        alone never implies resolution.
+    GroupingPolicy:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        windowSeconds:
+          type: integer
+          minimum: 30
+          maximum: 86400
+          default: 300
+      required:
+      - enabled
+      - windowSeconds
+      additionalProperties: false
+    EscalationPolicy:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        afterMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 5
+        targetChatIds:
+          type: array
+          items:
+            type: string
+            pattern: ^-?[1-9][0-9]{0,15}$
+            maxLength: 17
+          maxItems: 100
+          description: Existing subscribers in this tenant; usernames are rejected. IDs must be safe integers.
+      required:
+      - enabled
+      - afterMinutes
+      - targetChatIds
+      additionalProperties: false
+      description: Eligible targets receive unacknowledged Critical incidents in order. At least one target is required when enabled;
+        normal access and subscriber filters remain enforced.
+    DeliveryRule:
+      type: object
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]*$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        enabled:
+          type: boolean
+        levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationLevel'
+          maxItems: 5
+          description: Empty matches any level.
+        environments:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 80
+          maxItems: 20
+          description: Exact case-sensitive environment names; empty means every environment.
+        tags:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 40
+          maxItems: 10
+          description: Every listed tag must match; empty matches all.
+        mode:
+          type: string
+          enum:
+          - immediate
+          - digest
+          - mute
+        digestMinutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+          description: Required for all rules; applied only in digest mode.
+      required:
+      - id
+      - name
+      - enabled
+      - levels
+      - environments
+      - tags
+      - mode
+      - digestMinutes
+      additionalProperties: false
+    AutomationPolicy:
+      type: object
+      properties:
+        version:
+          type: integer
+          minimum: 0
+        grouping:
+          $ref: '#/components/schemas/GroupingPolicy'
+        responders:
+          type: array
+          items:
+            type: string
+            pattern: ^-?[1-9][0-9]{0,15}$
+            maxLength: 17
+          maxItems: 100
+          description: An empty allowlist permits all otherwise-authorized Telegram recipients to act; nonempty lists restrict
+            incident actions.
+        escalation:
+          $ref: '#/components/schemas/EscalationPolicy'
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeliveryRule'
+          maxItems: 50
+          description: First enabled matching rule wins; empty match arrays are wildcards.
+      required:
+      - version
+      - grouping
+      - responders
+      - escalation
+      - rules
+      additionalProperties: false
+      description: Tenant policy or complete application override. Initial version is 0; use the monotonic tenant revision returned
+        by each GET.
+    AutomationPolicyUpdate:
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+          description: Version from latest GET. Stale writes return HTTP 409.
+        grouping:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              default: false
+            windowSeconds:
+              type: integer
+              minimum: 30
+              maximum: 86400
+              default: 300
+          required: []
+          additionalProperties: false
+        responders:
+          type: array
+          items:
+            type: string
+            pattern: ^-?[1-9][0-9]{0,15}$
+            maxLength: 17
+          maxItems: 100
+          description: An empty allowlist permits all otherwise-authorized Telegram recipients to act; nonempty lists restrict
+            incident actions.
+        escalation:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              default: false
+            afterMinutes:
+              type: integer
+              minimum: 1
+              maximum: 1440
+              default: 5
+            targetChatIds:
+              type: array
+              items:
+                type: string
+                pattern: ^-?[1-9][0-9]{0,15}$
+                maxLength: 17
+              maxItems: 100
+              description: Existing subscribers in this tenant; usernames are rejected. IDs must be safe integers.
+          required: []
+          additionalProperties: false
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeliveryRule'
+          maxItems: 50
+          description: First enabled matching rule wins; empty match arrays are wildcards.
+      required:
+      - expectedVersion
+      additionalProperties: false
+      description: Partial update. Nested fields merge; rules replace the ordered list. Updating an inheriting application creates
+        an override. Unknown fields rejected.
+    AutomationPolicyResponse:
+      type: object
+      properties:
+        policy:
+          $ref: '#/components/schemas/AutomationPolicy'
+        inherited:
+          type: boolean
+          description: True when application inherits tenant policy.
+      required:
+      - policy
+      - inherited
+      additionalProperties: false
+    QuietHours:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        start:
+          type: string
+          pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
+          default: '22:00'
+        end:
+          type: string
+          pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
+          default: 08:00
+      required:
+      - enabled
+      - start
+      - end
+      additionalProperties: false
+      description: Inclusive start/exclusive end in local time. Overnight intervals supported; equal start/end rejected when enabled.
+        Repeated/skipped local times follow timezone changes.
+    SubscriberPreferences:
+      type: object
+      properties:
+        version:
+          type: integer
+          minimum: 0
+        levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationLevel'
+          maxItems: 5
+          description: Accepted levels; an empty array mutes everything, including Critical.
+          default:
+          - info
+          - success
+          - warning
+          - error
+          - critical
+        environments:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 80
+          maxItems: 20
+          description: Exact case-sensitive environment names; empty means every environment.
+        timezone:
+          type: string
+          maxLength: 80
+          default: Asia/Tehran
+          description: IANA timezone or UTC. Quiet hours follow its daylight-saving changes.
+        quietHours:
+          $ref: '#/components/schemas/QuietHours'
+        delivery:
+          type: string
+          enum:
+          - immediate
+          - digest
+          default: immediate
+        digestMinutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+          default: 60
+        criticalBypass:
+          type: boolean
+          default: true
+          description: Bypasses delays only; explicit mute, level/environment filters, bans and application/subscription permissions
+            remain enforced.
+      required:
+      - version
+      - levels
+      - environments
+      - timezone
+      - quietHours
+      - delivery
+      - digestMinutes
+      - criticalBypass
+      additionalProperties: false
+    SubscriberPreferencesUpdate:
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740990
+          description: Version from latest GET. Stale writes return HTTP 409.
+        levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationLevel'
+          maxItems: 5
+          description: Accepted levels; an empty array mutes everything, including Critical.
+          default:
+          - info
+          - success
+          - warning
+          - error
+          - critical
+        environments:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 80
+          maxItems: 20
+          description: Exact case-sensitive environment names; empty means every environment.
+        timezone:
+          type: string
+          maxLength: 80
+          default: Asia/Tehran
+          description: IANA timezone or UTC. Quiet hours follow its daylight-saving changes.
+        quietHours:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              default: false
+            start:
+              type: string
+              pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
+              default: '22:00'
+            end:
+              type: string
+              pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
+              default: 08:00
+          required: []
+          additionalProperties: false
+        delivery:
+          type: string
+          enum:
+          - immediate
+          - digest
+          default: immediate
+        digestMinutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+          default: 60
+        criticalBypass:
+          type: boolean
+          default: true
+          description: Bypasses delays only; explicit mute, level/environment filters, bans and application/subscription permissions
+            remain enforced.
+      required:
+      - expectedVersion
+      additionalProperties: false
+      description: Partial update; quiet-hour fields merge. If a rule and the subscriber both request digest mode, the longer
+        interval applies.
+    SubscriberPreferencesResponse:
+      type: object
+      properties:
+        preferences:
+          $ref: '#/components/schemas/SubscriberPreferences'
+      required:
+      - preferences
+      additionalProperties: false
+    DeliveryPreviewInput:
+      type: object
+      properties:
+        applicationId:
+          type: string
+          minLength: 2
+          maxLength: 48
+        chatId:
+          type: string
+          description: Optional existing subscriber; omitted uses default preferences.
+        level:
+          $ref: '#/components/schemas/AutomationLevel'
+        environment:
+          type: string
+          maxLength: 80
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 10
+        timestamp:
+          type: string
+          format: date-time
+          description: Simulation time, defaults to now; no notification is queued or sent.
+      required:
+      - applicationId
+      - level
+      additionalProperties: false
+    DeliveryDecision:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+          - immediate
+          - digest
+          - mute
+          - defer
+        reason:
+          type: string
+          description: default, level_filter, environment_filter, critical_bypass, quiet_hours, subscriber_digest, rule:<id>,
+            or a permission-failure explanation.
+        nextAt:
+          type:
+          - integer
+          - 'null'
+          description: Unix epoch milliseconds for future digest/defer delivery; null for immediate/mute.
+      required:
+      - mode
+      - reason
+      - nextAt
+      additionalProperties: false
+    Incident:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        notificationId:
+          type: string
+          format: uuid
+          description: Most recent notification in this incident.
+        applicationId:
+          type:
+          - string
+          - 'null'
+        application:
+          type: string
+        title:
+          type: string
+        event:
+          type: string
+        level:
+          $ref: '#/components/schemas/AutomationLevel'
+        environment:
+          type:
+          - string
+          - 'null'
+        fingerprint:
+          type: string
+        status:
+          type: string
+          enum:
+          - open
+          - acknowledged
+          - snoozed
+          - resolved
+        occurrences:
+          type: integer
+          minimum: 1
+        firstSeenAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+        acknowledgedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        resolvedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        snoozedUntil:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        nextEscalationAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        assigneeChatId:
+          type:
+          - string
+          - 'null'
+        escalationCount:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 1
+      required:
+      - id
+      - notificationId
+      - applicationId
+      - application
+      - title
+      - event
+      - level
+      - environment
+      - fingerprint
+      - status
+      - occurrences
+      - firstSeenAt
+      - lastSeenAt
+      - acknowledgedAt
+      - resolvedAt
+      - snoozedUntil
+      - nextEscalationAt
+      - assigneeChatId
+      - escalationCount
+      - version
+      additionalProperties: false
+    IncidentEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        action:
+          type: string
+        actorChatId:
+          type:
+          - string
+          - 'null'
+        actorName:
+          type:
+          - string
+          - 'null'
+        createdAt:
+          type: string
+          format: date-time
+        detail:
+          type: string
+      required:
+      - id
+      - action
+      - actorChatId
+      - actorName
+      - createdAt
+      - detail
+      additionalProperties: false
+    IncidentDetail:
+      type: object
+      properties:
+        incident:
+          $ref: '#/components/schemas/Incident'
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/IncidentEvent'
+          maxItems: 100
+          description: Latest retained events in chronological order.
+      required:
+      - incident
+      - timeline
+      additionalProperties: false
+    IncidentActionInput:
+      type: object
+      properties:
+        action:
+          type: string
+          enum:
+          - acknowledge
+          - snooze
+          - resolve
+        expectedVersion:
+          type: integer
+          minimum: 1
+        minutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 15
+          description: Used only for snooze actions.
+      required:
+      - action
+      - expectedVersion
+      additionalProperties: false
+    IncidentActionResponse:
+      type: object
+      properties:
+        incident:
+          $ref: '#/components/schemas/Incident'
+      required:
+      - incident
+      additionalProperties: false
+    IncidentPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Incident'
+          maxItems: 20
+        total:
+          type: integer
+          minimum: 0
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          const: 20
+      required:
+      - items
+      - total
+      - page
+      - pageSize
+      additionalProperties: false
+    IncidentOverview:
+      type: object
+      properties:
+        open:
+          type: integer
+          minimum: 0
+        acknowledged:
+          type: integer
+          minimum: 0
+        snoozed:
+          type: integer
+          minimum: 0
+        resolved:
+          type: integer
+          minimum: 0
+        totalOccurrences:
+          type: integer
+          minimum: 0
+        escalations:
+          type: integer
+          minimum: 0
+        averageAckSeconds:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          description: Mean seconds to first acknowledgment across retained acknowledged incidents; null when none exist.
+      required:
+      - open
+      - acknowledged
+      - snoozed
+      - resolved
+      - totalOccurrences
+      - escalations
+      - averageAckSeconds
+      additionalProperties: false
     Error:
       type: "object"
       properties:
@@ -3241,6 +4685,10 @@ components:
     NotificationInput:
       type: "object"
       properties:
+        fingerprint:
+          $ref: '#/components/schemas/IncidentFingerprint'
+        incidentStatus:
+          $ref: '#/components/schemas/IncidentStatus'
         application:
           description: "Optional compatibility field. Any value is replaced with the authenticated application's configured name."
         event:
@@ -3322,6 +4770,17 @@ components:
     NotificationRecord:
       type: "object"
       properties:
+        incidentId:
+          type: "string"
+          format: "uuid"
+          description: "Related incident in this tenant/application, when incident tracking is enabled."
+        grouped:
+          type: "boolean"
+          description: "True when this repeat updates a shared incident message; delivery counts describe those shared recipients."
+        fingerprint:
+          $ref: '#/components/schemas/IncidentFingerprint'
+        incidentStatus:
+          $ref: '#/components/schemas/IncidentStatus'
         application:
           type: "string"
           maxLength: 80
@@ -4000,13 +5459,19 @@ components:
         generatorURL:
           type: "string"
         fingerprint:
-          type: "string"
+          "$ref": "#/components/schemas/IncidentFingerprint"
+          description: "Native Alertmanager fingerprint is preserved across firing/resolved notifications. If omitted, a deterministic identity is derived from sorted labels."
       required:
         [ ]
       additionalProperties: true
     GrafanaWebhook:
       type: "object"
       properties:
+        groupKey:
+          type: string
+          description: Stable native group identity preserved through a bounded fingerprint across firing/resolved updates.
+        fingerprint:
+          $ref: '#/components/schemas/IncidentFingerprint'
         status:
           type: "string"
           enum:
@@ -4032,7 +5497,7 @@ components:
       additionalProperties: true
     TelegramUpdate:
       type: "object"
-      description: "Private /start, /stop, /apps, /all, my_chat_member, and owned application-selection callbacks are processed. New subscriptions receive all applications; bans prevent re-enrollment."
+      description: "Private /start, /stop, /apps, /all, /preferences, /timezone, /quiet, my_chat_member, and owned application/preference/incident callbacks are processed. New subscriptions receive all eligible applications. Bans prevent re-enrollment; incident actions recheck application and responder permissions."
       properties:
         update_id:
           type: "integer"
@@ -4054,6 +5519,10 @@ components:
     AdminNotificationInput:
       type: "object"
       properties:
+        fingerprint:
+          $ref: '#/components/schemas/IncidentFingerprint'
+        incidentStatus:
+          $ref: '#/components/schemas/IncidentStatus'
         application:
           description: "Optional compatibility field. Any value is replaced with the authenticated application's configured name."
         event:
@@ -4427,6 +5896,18 @@ components:
         [ "chatIds","banned" ]
       additionalProperties: false
   responses:
+    AutomationNotFound:
+      description: Requested tenant, application, incident, or subscriber was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    AutomationConflict:
+      description: Stale expectedVersion, changed automation policy, or already-resolved incident. Reload current state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     BadRequest:
       description: "Invalid JSON, notification, integration payload, settings, or parameter."
       content:

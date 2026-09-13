@@ -151,6 +151,8 @@ export interface NotificationInput {
   metadata?: Record<string, string | number | boolean>;
   tags?: string[];
   silent?: boolean;
+  fingerprint?: string;
+  incidentStatus?: 'firing' | 'resolved';
 }
 
 export interface SourceContext {
@@ -183,6 +185,8 @@ export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'unknow
 
 export interface NotificationRecord extends NotificationInput {
   id: string;
+  incidentId?: string;
+  grouped?: boolean;
   createdAt: string;
   source: SourceContext;
   status: 'queued' | 'sending' | 'completed' | 'partial' | 'failed' | 'empty';

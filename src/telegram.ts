@@ -37,13 +37,19 @@ export async function telegramCall<T = Record<string, unknown>>(
     });
     if (response.status >= 300 && response.status < 400) throw new TelegramError('Telegram response is uncertain (unexpected redirect).', response.status, true, undefined, 'invalid_response');
     if (response.status >= 500) throw new TelegramError('Telegram response is uncertain (server error).', response.status, true, undefined, 'upstream_error');
-    let data: { ok?: unknown; result?: T; error_code?: unknown; parameters?: { retry_after?: unknown } };
+    let data: { ok?: unknown; result?: T; error_code?: unknown; description?: unknown; parameters?: { retry_after?: unknown } };
     try { data = await response.json() as typeof data; }
     catch {
       if (controller.signal.aborted) throw new TelegramError('Telegram response is uncertain (timeout).', 0, true, undefined, 'timeout');
       throw new TelegramError('Telegram response is uncertain (invalid response).', response.status, true, undefined, 'invalid_response');
     }
     if (response.ok && data?.ok === true && data.result !== undefined) return { ok: true, result: data.result };
+    // A retried edit may already have reached Telegram before its response was lost.
+    if (method === 'editMessageText' && response.status === 400 && data?.ok === false && data.error_code === 400
+      && typeof data.description === 'string' && /^Bad Request: message is not modified(?::|$)/.test(data.description)
+      && typeof payload.message_id === 'number' && Number.isSafeInteger(payload.message_id) && payload.message_id > 0) {
+      return { ok: true, result: { message_id: payload.message_id } as T };
+    }
     const code = typeof data?.error_code === 'number' ? data.error_code : response.status;
     const retry = data?.parameters?.retry_after;
     if (code === 429 && typeof retry === 'number' && Number.isFinite(retry) && retry > 0) {
