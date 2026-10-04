@@ -14,6 +14,25 @@ Tokens are verified before saving and never returned by administration endpoints
 
 Applications belong to exactly one bot. The association cannot change after creation: moving an application returns `409 APPLICATION_BOT_IMMUTABLE`. Create a new application for the other bot instead. Application IDs remain unique across the tenant.
 
+## Telegram command menu
+
+The relay registers `/start`, `/apps`, `/all`, `/stop`, `/preferences`, `/timezone`, and `/quiet` with Telegram's [setMyCommands](https://core.telegram.org/bots/api#setmycommands) API and sets the default private-chat menu button to **Commands**. Each bot gets its own registration when it is connected, its token is saved, or its webhook is registered. Commands with arguments include usage examples in their descriptions; Telegram inserts the command and the user supplies the arguments. Connecting a bot or changing its token saves the local configuration only after Telegram confirms the menu setup; a failed setup preserves the previous local configuration so the operation can be retried.
+
+For an existing bot, select **Tenant → Bot → Settings → Register commands**. Repeat this after changing command settings manually in BotFather if you want to restore the relay's list. The operation uses the selected bot's saved credentials and does not require a new token or webhook. A configured disabled bot can have its menu updated without enabling it or sending messages.
+
+Registration targets `all_private_chats`, matching the relay's private-chat subscription support. Persian descriptions are installed for `language_code: "fa"` and the empty-language fallback. Other language-specific or chat-specific command overrides are left unchanged and can take precedence in Telegram; remove those overrides in Telegram if a particular user still sees a custom list. Group command settings are unchanged.
+
+To synchronize through the administration API, use an authenticated dashboard session and its exact origin:
+
+```sh
+curl --fail-with-body "$RELAY_URL/api/admin/tenants/$RELAY_TENANT/bots/$RELAY_BOT/commands" \
+  --request POST \
+  --cookie "$RELAY_ADMIN_COOKIE" \
+  --header "Origin: $RELAY_URL"
+```
+
+No request body is needed. A successful response is `{ "ok": true, "commands": [...] }`, with the registered command names and descriptions. The endpoint allows five requests per minute shared across the tenant’s bots. A missing bot returns `404`; an unconfigured bot returns `503`. Telegram rejection, throttling, and connection failures return `502 TELEGRAM_COMMANDS_SYNC_FAILED` without raw upstream details. Retrying registration is safe; a partial upstream failure can be repaired by registering again.
+
 ## Sending notifications
 
 The producer URL and payload stay the same:
@@ -70,6 +89,7 @@ Log in through `/api/admin/login` to obtain the dashboard session cookie. Mutati
 | PATCH | `/bots/{botId}` | `{name?, enabled?, botToken?, expectedVersion?}` → `{bot}` |
 | GET | `/bots/{botId}/status` | Cached Telegram bot/webhook status |
 | POST | `/bots/{botId}/webhook` | `{url: "https://relay.example/telegram/{tenantId}/bots/{botId}/webhook"}` |
+| POST | `/bots/{botId}/commands` | No body → `{ok: true, commands: [{command, description}]}` |
 | POST | `/applications?botId={botId}` | `{id, name, ...audienceOptions}` → application and one-time API key |
 
 Use the latest `version` as `expectedVersion` when editing. A stale edit returns `409 STALE_BOT`; reload before saving. A token assigned elsewhere returns `409 BOT_ALREADY_ASSIGNED`.
@@ -81,5 +101,7 @@ Add `?botId={botId}` to existing settings, subscribers, reports, automation, and
 Deploy the code with the existing Durable Object bindings and migration history intact. No new secret, binding, database, or manual data migration is needed.
 
 The existing bot becomes `default`, preserving its token, webhook secret, subscribers, application keys, bans, queues, and reports. Existing applications receive `botId: "default"`. Old `/telegram/webhook` and `/telegram/{tenantId}/webhook` routes keep working for the default bot. The legacy `PUT /api/admin/tenants/{tenantId}/bot` remains a default-bot token configuration alias; use `/bots` for new integrations.
+
+After upgrading, use **Settings → Register commands** for each existing bot to publish the full command menu. Registering its webhook also synchronizes the menu.
 
 See [OpenAPI](openapi.yaml) for schemas and [delivery automation](automation.md) for policies and incident endpoints.

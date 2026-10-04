@@ -19,6 +19,7 @@ import {DEFAULT_SUBSCRIBER_PREFERENCES, automationPolicyInput, evaluateDelivery,
 import {formatRichDigest} from './rich-message';
 import {formatNotification, formatRichNotification, telegramCall, TelegramError} from './telegram';
 import {LEGACY_WELCOME_MESSAGE, subscriptionMenu} from './subscription-menu';
+import {parseBotCommand} from './bot-commands';
 
 type Row = Record<string, SqlStorageValue>;
 type DirectoryApplication = Pick<Application, 'id' | 'name'>;
@@ -1303,7 +1304,8 @@ export class NotificationHub extends DurableObject<Env> {
       } | undefined;
       if (message?.chat?.type === 'private' && Number.isSafeInteger(message.chat.id) && typeof message.text === 'string') {
         const chatId = String(message.chat.id);
-        const command = /^\/(start|stop|apps|all|preferences|timezone|quiet)(?:@[A-Za-z0-9_]+)?(?:\s|$)/.exec(message.text)?.[1];
+        const parsedCommand = parseBotCommand(message.text);
+        const command = parsedCommand?.command;
         if (command === 'start') {
           // Opt-out events remain valid while disabled; disabled tenants cannot enroll users.
           if (!runtime.enabled || runtime.botEnabled === false) return;
@@ -1331,7 +1333,7 @@ export class NotificationHub extends DurableObject<Env> {
           if (command !== 'preferences') {
             const prefs = this.getSubscriberPreferences(chatId);
             const {version, ...patch} = prefs;
-            const arguments_ = message.text.trim().split(/\s+/).slice(1);
+            const arguments_ = parsedCommand!.argument.split(/\s+/);
             if (command === 'timezone') patch.timezone = arguments_[0] ?? '';
             else patch.quietHours = {enabled: true, start: arguments_[0] ?? '', end: arguments_[1] ?? ''};
             try { this.automation.updatePreferences(chatId, {...patch, expectedVersion: version}); this.rescheduleSubscriberPreferences(chatId); }

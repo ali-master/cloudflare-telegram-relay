@@ -4294,6 +4294,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/admin/tenants/{tenantId}/bots/{botId}/commands:
+    parameters:
+    - *id001
+    - $ref: '#/components/parameters/BotId'
+    post:
+      operationId: registerBotCommandsForTenant
+      summary: Register all supported commands in this bot's Telegram menu
+      description: >-
+        Uses saved credentials to register start, apps, all, stop, preferences, timezone, and quiet
+        for all_private_chats, with Persian descriptions for fa and the empty-language fallback.
+        Sets the default private-chat menu button to commands. Other language/chat overrides are preserved.
+        Requires a dashboard session and exact Origin. No body required; limited to five requests per minute shared across the tenant’s bots.
+        May configure a disabled bot without enabling it or sending messages. Safe to repeat after a partial
+        Telegram failure. Bot connection, token saves, and webhook registration also synchronize this menu.
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      responses:
+        '200':
+          description: Telegram accepted the supported command list and menu button.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotCommandsResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: Bot configuration changed during registration. Reload and retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: TELEGRAM_COMMANDS_SYNC_FAILED. Registration was not fully confirmed; raw upstream details and credentials are not returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
   /api/admin/tenants/{tenantId}/bots/{botId}/webhook:
     parameters:
     - *id001
@@ -4651,6 +4707,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /api/admin/bots/{botId}/commands:
+    parameters:
+    - $ref: '#/components/parameters/BotId'
+    post:
+      operationId: registerBotCommands
+      summary: Register all supported commands in this bot's Telegram menu
+      description: >-
+        Uses saved credentials to register start, apps, all, stop, preferences, timezone, and quiet
+        for all_private_chats, with Persian descriptions for fa and the empty-language fallback.
+        Sets the default private-chat menu button to commands. Other language/chat overrides are preserved.
+        Requires a dashboard session and exact Origin. No body required; limited to five requests per minute shared across the tenant’s bots.
+        May configure a disabled bot without enabling it or sending messages. Safe to repeat after a partial
+        Telegram failure. Bot connection, token saves, and webhook registration also synchronize this menu.
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      responses:
+        '200':
+          description: Telegram accepted the supported command list and menu button.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotCommandsResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: Bot configuration changed during registration. Reload and retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: TELEGRAM_COMMANDS_SYNC_FAILED. Registration was not fully confirmed; raw upstream details and credentials are not returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
   /api/admin/bots/{botId}/webhook:
     parameters:
     - $ref: '#/components/parameters/BotId'
@@ -4862,6 +4973,32 @@ components:
       name: "X-Telegram-Bot-Api-Secret-Token"
       description: "Selected bot's private webhook secret. The default tenant may use TELEGRAM_WEBHOOK_SECRET until overridden."
   schemas:
+    BotCommand:
+      type: object
+      properties:
+        command:
+          type: string
+          enum: [start, apps, all, stop, preferences, timezone, quiet]
+          description: Bare command name without slash or arguments.
+        description:
+          type: string
+          minLength: 1
+          maxLength: 256
+      required: [command, description]
+      additionalProperties: false
+    BotCommandsResult:
+      type: object
+      properties:
+        ok:
+          const: true
+        commands:
+          type: array
+          minItems: 7
+          maxItems: 7
+          items:
+            $ref: '#/components/schemas/BotCommand'
+      required: [ok, commands]
+      additionalProperties: false
     BotWebhookResult:
       type: object
       properties:

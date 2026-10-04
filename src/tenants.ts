@@ -20,6 +20,7 @@ import {telegramCall, TelegramError} from './telegram';
 import {applicationAudience, ApplicationStore} from './applications';
 import {LoginAuditStore} from './login-audit';
 import {BotStore, type StoredBot} from './bots';
+import {TELEGRAM_BOT_COMMANDS, type TelegramBotCommand} from './bot-commands';
 
 interface StoredTenant {
   id: string;
@@ -464,6 +465,11 @@ export class TenantRegistry extends DurableObject<Env> {
     }
     if (this.bots.get(id, botId)) fail('BOT_EXISTS', 'Bot ID is already in use.');
     this.checkBotIdentity(proposed, identity.telegramId);
+    const tenantVersion = this.stored(id).version;
+    await this.syncBotCommands(data.botToken as string);
+    if (this.bots.get(id, botId)) fail('BOT_EXISTS', 'Bot ID is already in use.');
+    this.checkBotIdentity(proposed, identity.telegramId);
+    this.checkVersion(this.stored(id), tenantVersion);
     const bot = {...proposed, ...identity, botToken: data.botToken as string};
     this.persistBot(bot);
     await this.wakeHub(this.stored(id), botId);
@@ -482,6 +488,13 @@ export class TenantRegistry extends DurableObject<Env> {
     const current = this.storedBot(id, botId);
     this.checkBotVersion(current, before.version);
     if (identity.telegramId) this.checkBotIdentity(current, identity.telegramId);
+    if (data.botToken !== undefined) {
+      const tenantVersion = this.stored(id).version;
+      await this.syncBotCommands(data.botToken as string);
+      this.checkBotVersion(this.storedBot(id, botId), before.version);
+      if (identity.telegramId) this.checkBotIdentity(current, identity.telegramId);
+      this.checkVersion(this.stored(id), tenantVersion);
+    }
     const currentSecret = this.botSecret(current);
     const bot: StoredBot = {...current, ...identity, name, enabled: data.enabled === undefined ? current.enabled : data.enabled as boolean,
       botToken: data.botToken === undefined ? current.botToken : data.botToken as string,
@@ -503,6 +516,10 @@ export class TenantRegistry extends DurableObject<Env> {
       if (error instanceof Error && error.message.startsWith('BOT_CHANGE_REQUIRES_NEW_BOT:')) fail('BOT_CHANGE_REQUIRES_NEW_TENANT', 'Create a new bot entry when switching Telegram bot identity.');
       throw error;
     }
+    this.checkVersion(this.stored(id), before.version);
+    this.checkBotVersion(this.storedBot(id), bot.version);
+    this.checkBotIdentity(bot, identity.telegramId);
+    await this.syncBotCommands(botToken);
     this.checkVersion(this.stored(id), before.version);
     this.checkBotVersion(this.storedBot(id), bot.version);
     this.checkBotIdentity(bot, identity.telegramId);
@@ -634,6 +651,32 @@ export class TenantRegistry extends DurableObject<Env> {
     this.storeUsage(id, botId, revision, actual);
   }
 
+  /** Sync is explicit or configuration-time; normal notification and runtime reads never call Telegram. */
+  async registerBotCommands(id: string, botId = 'default'): Promise<{ok: true; commands: TelegramBotCommand[]}> {
+    const tenant = this.stored(id), before = this.storedBot(id, botId);
+    if (!before.botToken) fail('BOT_NOT_CONFIGURED', 'Configure this Telegram bot before registering its commands.');
+    await this.syncBotCommands(before.botToken);
+    this.checkBotVersion(this.storedBot(id, botId), before.version);
+    this.checkVersion(this.stored(id), tenant.version);
+    return {ok: true, commands: TELEGRAM_BOT_COMMANDS.map(command => ({...command}))};
+  }
+
+  private async syncBotCommands(token: string): Promise<void> {
+    try {
+      // Persian-specific lists take precedence over fallback lists in Telegram clients.
+      for (const language_code of ['', 'fa']) {
+        const result = await telegramCall<boolean>(token, 'setMyCommands', {
+          commands: TELEGRAM_BOT_COMMANDS, scope: {type: 'all_private_chats'}, language_code,
+        });
+        if (result.result !== true) throw new Error('Command registration was not confirmed.');
+      }
+      const menu = await telegramCall<boolean>(token, 'setChatMenuButton', {menu_button: {type: 'commands'}});
+      if (menu.result !== true) throw new Error('Command menu was not confirmed.');
+    } catch {
+      fail('TELEGRAM_COMMANDS_SYNC_FAILED', 'Telegram could not confirm command menu registration. Retry command synchronization.');
+    }
+  }
+
   async registerWebhook(id: string, value: string, botId?: string): Promise<{ ok: true; url: string }> {
     const selectedBotId = botId ?? 'default';
     const invalidCode = botId === undefined ? 'INVALID_TENANT' : 'INVALID_WEBHOOK';
@@ -647,6 +690,7 @@ export class TenantRegistry extends DurableObject<Env> {
     catch { fail(invalidCode, 'A public HTTPS webhook URL is required.'); }
     const paths = [`/telegram/${id}/bots/${selectedBotId}/webhook`, ...(selectedBotId === 'default' ? [`/telegram/${id}/webhook`, ...(id === 'default' ? ['/telegram/webhook'] : [])] : [])];
     if (url!.protocol !== 'https:' || url!.username || url!.password || url!.hash || url!.search || !paths.includes(url!.pathname)) fail(invalidCode, 'Use this bot’s public HTTPS webhook URL.');
+    await this.syncBotCommands(token);
     let registrationFailed = false;
     await this.ctx.blockConcurrencyWhile(async () => {
       try {

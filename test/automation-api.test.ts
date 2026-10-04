@@ -104,7 +104,7 @@ describe('automation administration boundaries', () => {
   });
 
   it('groups authenticated producer events, preserves request idempotency and isolates incident actions', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ok: true, result: {id: 123456, is_bot: true, username: 'fixture_bot'}})));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new Response(JSON.stringify({ok: true, result: String(request).endsWith('/getMe') ? {id: 123456, is_bot: true, username: 'fixture_bot'} : true})));
     await bindings.TENANTS.getByName('registry').configureBot('default', '123456:test-token');
     const config = await data(path('automation'));
     await data(path('automation'), 'PUT', {expectedVersion: config.policy.version, grouping: {enabled: true, windowSeconds: 300}});

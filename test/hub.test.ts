@@ -417,9 +417,9 @@ async function tenant(limits: Partial<TenantLimits> = {}) {
   const registry = bindings.TENANTS.getByName('registry');
   const botId = ++botIdSequence;
   await registry.createTenant({id, name: `Tenant ${id}`, limits});
-  const mock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+  const mock = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new Response(JSON.stringify({
     ok: true,
-    result: {id: botId, is_bot: true, first_name: 'Test', username: 'tenant_test_bot'}
+    result: String(request).endsWith('/getMe') ? {id: botId, is_bot: true, first_name: 'Test', username: 'tenant_test_bot'} : true
   })));
   await registry.configureBot(id, `${botId}:tenant-token-${id}`);
   mock.mockRestore();

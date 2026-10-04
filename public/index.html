@@ -17,9 +17,11 @@
     <link rel="stylesheet" href="/api-guide.css">
     <link rel="stylesheet" href="/automation.css">
     <link rel="stylesheet" href="/bots.css">
+    <link rel="stylesheet" href="/bot-commands.css">
     <script src="/selects.js" defer></script>
     <script src="/automation.js" defer></script>
     <script src="/bots.js" defer></script>
+    <script src="/bot-commands.js" defer></script>
     <script src="/app.js" defer></script>
 </head>
 <body>
@@ -575,6 +577,32 @@
                                 ثبت وب‌هوک
                             </button>
                         </div>
+                        <section class="bot-commands" aria-labelledby="bot-commands-heading">
+                            <div class="bot-commands-header">
+                                <div class="bot-commands-title">
+                                    <span class="bot-commands-icon" aria-hidden="true"><svg class="icon"><use href="#i-code"/></svg></span>
+                                    <div><h3 id="bot-commands-heading">منوی فرمان‌های بات</h3>
+                                        <p class="muted">کاربران با زدن <bdi><code>/</code></bdi> در گفت‌وگوی خصوصی، همهٔ فرمان‌ها را از پیشنهادهای تلگرام انتخاب می‌کنند.</p></div>
+                                </div>
+                                <span id="bot-commands-badge" class="badge neutral">۷ فرمان</span>
+                            </div>
+                            <ul id="bot-commands-list" class="bot-commands-list" aria-label="فرمان‌های قابل ثبت">
+                                <li><code dir="ltr">/start</code><span>شروع و منوی اصلی</span></li>
+                                <li><code dir="ltr">/apps</code><span>انتخاب اپلیکیشن‌ها</span></li>
+                                <li><code dir="ltr">/all</code><span>دریافت همهٔ اعلان‌های مجاز</span></li>
+                                <li><code dir="ltr">/preferences</code><span>تنظیمات دریافت</span></li>
+                                <li><code dir="ltr">/timezone</code><span>منطقهٔ زمانی</span></li>
+                                <li><code dir="ltr">/quiet</code><span>ساعت‌های سکوت</span></li>
+                                <li><code dir="ltr">/stop</code><span>توقف اعلان‌ها</span></li>
+                            </ul>
+                            <div class="bot-commands-footer">
+                                <p id="bot-commands-feedback" class="muted" role="status">هنگام ذخیرهٔ توکن و ثبت وب‌هوک، فرمان‌ها خودکار ثبت می‌شوند. برای بات‌های قبلی از دکمهٔ روبه‌رو استفاده کنید.</p>
+                                <button type="button" id="register-bot-commands" class="button secondary" disabled>
+                                    <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>
+                                    <span>ثبت فرمان‌ها در تلگرام</span>
+                                </button>
+                            </div>
+                        </section>
                         <div id="request-context" class="context-line"></div>
                     </div>
                 </article>

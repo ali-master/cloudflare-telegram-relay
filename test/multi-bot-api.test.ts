@@ -2,6 +2,7 @@ import {env} from 'cloudflare:workers';
 import {reset, SELF} from 'cloudflare:test';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {hubName, type Env, type TelegramBot} from '../src/types';
+import {TELEGRAM_BOT_COMMANDS} from '../src/bot-commands';
 
 const origin = 'https://relay.test';
 const bindings = env as unknown as Env;
@@ -28,7 +29,7 @@ beforeEach(async () => {
     const id = Number(/\/bot(\d+):/.exec(url)?.[1]);
     return new Response(JSON.stringify({ok: true, result: url.endsWith('/getMe')
       ? {id, is_bot: true, username: `fixture_${id}_bot`}
-      : url.endsWith('/setWebhook') ? true : url.endsWith('/getWebhookInfo') ? {url: ''} : {message_id: 42}}));
+      : /\/(setWebhook|setMyCommands|setChatMenuButton)$/.test(url) ? true : url.endsWith('/getWebhookInfo') ? {url: ''} : {message_id: 42}}));
   });
   const session = await request('/api/admin/login', 'POST', {apiKey: 'test-admin-key-which-is-not-a-production-secret'}, {Origin: origin});
   cookie = session.headers.get('Set-Cookie')!.split(';')[0];
@@ -44,6 +45,60 @@ beforeEach(async () => {
 afterEach(async () => { vi.restoreAllMocks(); await reset(); });
 
 describe('multi-bot management and authenticated routing', () => {
+  it('registers commands only for the selected bot, including a configured disabled bot', async () => {
+    await registry().updateBot('default', 'operations', {enabled: false});
+    const telegram = vi.mocked(globalThis.fetch);
+    telegram.mockClear();
+    const response = await admin('/api/admin/tenants/default/bots/operations/commands', 'POST');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ok: true, commands: TELEGRAM_BOT_COMMANDS});
+    const calls = telegram.mock.calls.filter(([input]) => String(input).startsWith('https://api.telegram.org/'));
+    expect(calls).toHaveLength(3);
+    expect(calls.every(([input]) => String(input).includes('/bot234567:'))).toBe(true);
+    expect(await registry().getBot('default', 'operations')).toMatchObject({enabled: false});
+    telegram.mockClear();
+    expect((await admin('/api/admin/bots/default/commands', 'POST')).status).toBe(200);
+    expect(telegram.mock.calls.every(([input]) => String(input).includes('/bot123456:'))).toBe(true);
+  });
+
+  it('protects command registration with admin session, exact origin and tenant ownership', async () => {
+    const path = '/api/admin/tenants/default/bots/operations/commands';
+    const telegram = vi.mocked(globalThis.fetch);
+    telegram.mockClear();
+    expect((await request(path, 'POST')).status).toBe(401);
+    expect((await request(path, 'POST', undefined, {'X-API-Key': operationsKey, Origin: origin})).status).toBe(401);
+    expect((await request(path, 'POST', undefined, {Cookie: cookie, Origin: 'https://other.test'})).status).toBe(403);
+    expect((await request(path, 'POST', undefined, {Cookie: cookie})).status).toBe(403);
+    await registry().createTenant({id: 'other', name: 'Other tenant'});
+    expect((await admin('/api/admin/tenants/other/bots/operations/commands', 'POST')).status).toBe(404);
+    const unconfigured = await admin('/api/admin/tenants/other/bots/default/commands', 'POST');
+    expect(unconfigured.status).toBe(503);
+    expect(await unconfigured.json()).toMatchObject({error: {code: 'BOT_NOT_CONFIGURED'}});
+    expect(telegram).not.toHaveBeenCalled();
+  });
+
+  it('reports Telegram command registration failures without leaking credentials and permits retry', async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValueOnce(new Error('https://api.telegram.org/bot234567:fixture-operations-token/setMyCommands'));
+    const path = '/api/admin/tenants/default/bots/operations/commands';
+    const failed = await admin(path, 'POST');
+    expect(failed.status).toBe(502);
+    const raw = await failed.text();
+    expect(raw).not.toContain('fixture-operations-token');
+    expect(raw).not.toContain('api.telegram.org');
+    expect(JSON.parse(raw)).toMatchObject({error: {code: 'TELEGRAM_COMMANDS_SYNC_FAILED'}});
+    expect((await admin(path, 'POST')).status).toBe(200);
+  });
+
+  it('rate limits command registration before making more Telegram calls', async () => {
+    const path = '/api/admin/tenants/default/bots/operations/commands';
+    for (let attempt = 0; attempt < 5; attempt++) expect((await admin(path, 'POST')).status).toBe(200);
+    vi.mocked(globalThis.fetch).mockClear();
+    const limited = await admin(path, 'POST');
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({error: {code: 'RATE_LIMITED'}});
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('lists only public bot metadata and binds applications to the selected bot', async () => {
     const response = await admin('/api/admin/tenants/default/bots');
     expect(response.status).toBe(200);

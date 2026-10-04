@@ -23,7 +23,7 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const result = String(request).endsWith('/getMe')
       ? {id, is_bot: true, first_name: `Bot ${id}`, username: `bot_${id}`}
-      : String(request).endsWith('/answerCallbackQuery') ? true : {message_id: body.message_id ?? ++messageId};
+      : /\/(answerCallbackQuery|setMyCommands|setChatMenuButton)$/.test(String(request)) ? true : {message_id: body.message_id ?? ++messageId};
     return new Response(JSON.stringify({ok: true, result}));
   });
 });

@@ -65,7 +65,7 @@ To change the key later, run `npx wrangler secret put API_KEY`, or open **Worker
 ## Connect your bots
 
 1. Log in to the dashboard and select the default tenant, or create a tenant.
-2. In **Bots**, connect the existing **default** slot, or add a bot with a unique ID, display name, and BotFather token. The relay verifies the token and generates a private webhook secret.
+2. In **Bots**, connect the existing **default** slot, or add a bot with a unique ID, display name, and BotFather token. The relay verifies the token, registers all supported commands in Telegram, and generates a private webhook secret.
 3. Click **Register webhook** on the deployed HTTPS URL.
 4. Select that bot in the dashboard header. In **Applications**, create an application and save the generated API key; it is only shown when created or rotated.
 5. Open the bot in Telegram and send `/start`.
@@ -135,6 +135,9 @@ See the [incident and delivery-rules guide](docs/automation.md) for setup, paylo
 | `/stop` | Stop receiving notifications |
 | `/preferences` | Configure your delivery preferences |
 | `/timezone Asia/Tehran` | Set the time zone for your quiet hours |
+| `/quiet 22:00 08:00` | Set daily quiet hours in your selected time zone |
+
+All seven commands appear in Telegram's private-chat command menu and `/` suggestions. Registration runs when connecting a bot, saving its token, or registering its webhook. For a bot connected before this feature, select it in the dashboard and use **Settings → Register commands** once. This also restores the command menu after a manual BotFather change; no token re-entry is needed. Persian descriptions are registered for Persian-language clients and as the fallback for other languages. Registration does not subscribe users, enable a disabled bot, or send a notification. See [Telegram command registration](docs/multi-bot.md#telegram-command-menu) for the admin endpoint and scope details.
 
 The `/start` reply uses short paragraphs and Telegram [inline keyboard buttons](https://core.telegram.org/bots/api#inlinekeyboardmarkup): **Choose applications**, **Delivery preferences**, **Receive all permitted applications**, and **Stop notifications**. Stopping replaces the controls with a **Reactivate** button. These buttons perform the same actions as the commands; users do not need to type a command for each action. Sending `/start` again reopens the controls without resetting existing application choices or delivery preferences.
 

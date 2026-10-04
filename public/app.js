@@ -300,6 +300,7 @@ function clearTenantData() {
   $('#subscriber-bot-link').hidden = true;
   $('#subscriber-bot-link').removeAttribute('href');
   $('#register-webhook').disabled = true;
+  window.RelayBotCommands.render();
   $('#health-arc').setAttribute('stroke-dasharray', '0 428');
   for (const id of ['#global-error', '#bot-token-error', '#telegram-status-error', '#compose-error']) showError(id, '');
   loading($('#delivery-chart'));
@@ -813,6 +814,7 @@ async function api(path, options = {}) {
     state.activeWrites++;
     $('#tenant-selector').disabled = true;
     $('#bot-scope-button').disabled = true;
+    window.RelayBotCommands.render();
     syncSelects();
   }
   try {
@@ -850,6 +852,7 @@ async function api(path, options = {}) {
       state.activeWrites = Math.max(0, state.activeWrites - 1);
       $('#tenant-selector').disabled = state.activeWrites > 0 || !state.tenants.length;
       window.RelayBots.renderScope();
+      window.RelayBotCommands.render();
       syncSelects();
     }
   }
@@ -1095,6 +1098,7 @@ function renderStatus(data) {
   else if (!data.configured.bot) text('#webhook-description', 'پس از تعریف توکن بات و برقراری اتصال، وضعیت وب‌هوک نمایش داده می‌شود.');
   else text('#webhook-description', webhook?.url ? `آدرس ثبت‌شده: ${webhook.url} · ${count(webhook.pending_update_count)} به‌روزرسانی در انتظار` : 'وب‌هوکی ثبت نشده است. آن را برای ثبت عضویت کاربران به این Worker متصل کنید.');
   $('#register-webhook').disabled = !data.configured.bot || !data.configured.webhookSecret;
+  window.RelayBotCommands.render();
   const botLink = $('#subscriber-bot-link');
   if (data.bot?.username && /^[a-zA-Z0-9_]+$/.test(data.bot.username)) {
     botLink.href = `https://t.me/${data.bot.username}`;
@@ -2393,6 +2397,7 @@ function updateApiExample() {
 }
 
 window.RelayBots.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects, selectedTenant, switchBot, changeTab, updateApiExample, renderStatus, renderApplications, renderSettings});
+window.RelayBotCommands.init({$, state, node, count, busy, toast, api, tenantPath});
 window.RelayAutomation.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects});
 updateApiExample();
 for (const [selector, getExample] of [['#copy-example', () => curlExample], ['#copy-status-example', () => statusExample]]) {

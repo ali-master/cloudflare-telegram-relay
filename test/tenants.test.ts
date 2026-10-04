@@ -11,6 +11,8 @@ const response = (result: unknown) => new Response(JSON.stringify({
   ok: true,
   result
 }), {headers: {'Content-Type': 'application/json'}});
+const commandRequest = (request: RequestInfo | URL) => /\/(setMyCommands|setChatMenuButton)$/.test(String(request));
+const botResponse = (request: RequestInfo | URL, id: number) => response(commandRequest(request) ? true : bot(id));
 const bot = (id: number) => ({id, is_bot: true, first_name: 'Operations bot', username: `ops_bot_${id}`});
 const reject = (operation: () => PromiseLike<unknown>) => (async () => await operation())();
 
@@ -101,7 +103,7 @@ describe('tenant bot ownership and status', () => {
     const token = '910010:previous-fixture-token';
     const replacement = '910010:replacement-fixture-token';
     const privateDetail = `https://api.telegram.org/bot${replacement}/getMe private-upstream-diagnostic`;
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response(bot(910010)));
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => botResponse(request, 910010));
     await registry.configureBot('default', token);
     const original = await registry.getRuntime('default');
     const cases: Array<{ code: string; response?: () => Response; error?: Error }> = [
@@ -161,12 +163,12 @@ describe('tenant bot ownership and status', () => {
       expect(String(caught)).not.toContain('private-upstream-diagnostic');
       expect(await registry.getRuntime('default')).toEqual(original);
     }
-    expect(fetcher).toHaveBeenCalledTimes(cases.length + 1);
+    expect(fetcher).toHaveBeenCalledTimes(cases.length + 4);
   });
 
   it('validates stored identity, preserves webhook secrets on rotation, and retains default bot configuration after eviction', async () => {
     await registry.createTenant({id: 'bot-owner', name: 'Owner'});
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response(bot(910001)));
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => botResponse(request, 910001));
     const configured = await registry.configureBot('bot-owner', '910001:first-token');
     expect(configured.botId).toBe('910001');
     expect(JSON.stringify(configured)).not.toContain('first-token');
@@ -174,9 +176,9 @@ describe('tenant bot ownership and status', () => {
     expect(runtime.webhookSecret).toMatch(/^[a-f0-9]{64}$/);
     await registry.configureBot('bot-owner', '910001:second-token', configured.version);
     expect((await registry.getRuntime('bot-owner'))?.webhookSecret).toBe(runtime.webhookSecret);
-    fetcher.mockImplementation(async () => response(bot(123456)));
+    fetcher.mockImplementation(async request => botResponse(request, 123456));
     await registry.configureBot('default', '123456:default-saved-token');
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher).toHaveBeenCalledTimes(12);
     const defaultRuntime = await registry.getRuntime('default');
     await evictDurableObject(registry);
     expect((await registry.getRuntime('default'))?.botToken).toBe('123456:default-saved-token');
@@ -191,7 +193,7 @@ describe('tenant bot ownership and status', () => {
   it('rechecks bot ownership when two independent getMe requests race', async () => {
     await registry.createTenant({id: 'owner-one', name: 'One'});
     await registry.createTenant({id: 'owner-two', name: 'Two'});
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response(bot(910003)));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async request => botResponse(request, 910003));
     const results = await Promise.allSettled([
       reject(() => registry.configureBot('owner-one', '910003:shared-token')),
       reject(() => registry.configureBot('owner-two', '910003:shared-token')),
@@ -230,7 +232,7 @@ describe('tenant bot ownership and status', () => {
 
   it('caches status for 60 seconds, coalesces refreshes, and invalidates after mutation', async () => {
     await registry.createTenant({id: 'status-cache', name: 'Status'});
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => String(request).endsWith('/getMe') ? response(bot(910005)) : response({
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => commandRequest(request) ? response(true) : String(request).endsWith('/getMe') ? response(bot(910005)) : response({
       url: 'https://relay.test/telegram/status-cache/webhook',
       pending_update_count: 0
     }));
@@ -256,7 +258,7 @@ describe('tenant bot ownership and status', () => {
 
   it('registers only enabled tenant webhook paths and redacts network errors', async () => {
     await registry.createTenant({id: 'webhook', name: 'Webhook'});
-    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response(bot(910006)));
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => botResponse(request, 910006));
     await registry.configureBot('webhook', '910006:secret-token');
     fetcher.mockImplementation(async () => response(true));
     expect(await registry.registerWebhook('webhook', 'https://relay.test/telegram/webhook/webhook')).toEqual({
@@ -271,7 +273,10 @@ describe('tenant bot ownership and status', () => {
     await registry.updateTenant('webhook', {enabled: false});
     await expect(reject(() => registry.registerWebhook('webhook', 'https://relay.test/telegram/webhook/webhook'))).rejects.toThrow('TENANT_DISABLED:');
     await registry.updateTenant('webhook', {enabled: true});
-    fetcher.mockRejectedValue(new Error('Fetch failed for /bot910006:secret-token/'));
+    fetcher.mockImplementation(async request => {
+      if (commandRequest(request)) return response(true);
+      throw new Error('Fetch failed for /bot910006:secret-token/');
+    });
     const status = await registry.getBotStatus('webhook', true) as BotStatus;
     expect(status.telegramError).toBeTruthy();
     expect(JSON.stringify(status)).not.toContain('910006:secret-token');

@@ -28,9 +28,9 @@ async function cookie() {
 let authHeaders: Record<string, string>;
 beforeEach(async () => {
   const registry = (env as unknown as Env).TENANTS.getByName('registry');
-  const mock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+  const mock = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new Response(JSON.stringify({
     ok: true,
-    result: {id: 123456, is_bot: true, username: 'fixture_bot'}
+    result: String(request).endsWith('/getMe') ? {id: 123456, is_bot: true, username: 'fixture_bot'} : true
   })));
   try {
     await registry.configureBot('default', '123456:test-token');
@@ -277,9 +277,9 @@ describe('tenant and application boundaries', () => {
     const created = await admin(session, '/tenants', 'POST', {id: 'team-one', name: 'Team One'});
     expect(created.status).toBe(201);
     expect(Object.keys(await created.json() as object)).toEqual(['tenant']);
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new Response(JSON.stringify({
       ok: true,
-      result: {id: 987654, is_bot: true, username: 'team_one_bot'}
+      result: String(request).endsWith('/getMe') ? {id: 987654, is_bot: true, username: 'team_one_bot'} : true
     })));
     const configured = await admin(session, '/tenants/team-one/bot', 'PUT', {botToken: '987654:test-token'});
     expect(configured.status).toBe(200);

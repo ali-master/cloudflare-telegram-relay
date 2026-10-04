@@ -26,7 +26,7 @@ beforeEach(async()=>{
   const registry=bindings.TENANTS.getByName('registry');
   await registry.createTenant({id:tenantId,name:'Automation tests'});
   const botId=Math.floor(Math.random()*100000000)+100000;
-  const mock=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>new Response(JSON.stringify({ok:true,result:{id:botId,is_bot:true,first_name:'Automation',username:'automation_bot'}})));
+  const mock=vi.spyOn(globalThis,'fetch').mockImplementation(async request=>new Response(JSON.stringify({ok:true,result:String(request).endsWith('/getMe')?{id:botId,is_bot:true,first_name:'Automation',username:'automation_bot'}:true})));
   await registry.configureBot(tenantId,`${botId}:automation-test-token`);mock.mockRestore();
   await registry.createApplication(tenantId,{id:'payments',name:'Payments'});
   await registry.createApplication(tenantId,{id:'deployments',name:'Deployments'});

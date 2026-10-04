@@ -204,6 +204,11 @@ botAdmin.get('/:botId/status', async c => {
   await selectBot(c, c.req.param('botId'));
   return c.json(await registry(c).getBotStatus(c.get('tenant').id, false, c.get('selectedBotId')));
 });
+botAdmin.post('/:botId/commands', async c => {
+  const bot = await selectBot(c, c.req.param('botId'));
+  if (!await tenantHub(c).rateLimit('admin:bot-commands', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  return c.json(await registry(c).registerBotCommands(c.get('tenant').id, bot.id));
+});
 botAdmin.post('/:botId/webhook', async c => {
   const bot = await selectBot(c, c.req.param('botId'), true);
   if (!await tenantHub(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
@@ -439,6 +444,7 @@ app.onError((error, c) => {
     APPLICATION_BOT_IMMUTABLE: [409, 'بات اپلیکیشن پس از ساخت قابل تغییر نیست؛ برای بات دیگر یک اپلیکیشن جدید بسازید.'],
     INVALID_BOT_TOKEN: [400, 'تلگرام BOT_TOKEN را تأیید نکرد؛ توکن معتبر بات را وارد کنید.'],
     TELEGRAM_UNAVAILABLE: [502, 'ارتباط با تلگرام برقرار نشد؛ دوباره تلاش کنید.'],
+    TELEGRAM_COMMANDS_SYNC_FAILED: [502, 'ثبت فرمان‌های بات در تلگرام کامل نشد؛ دوباره تلاش کنید.'],
     TELEGRAM_TIMEOUT: [504, 'تلگرام در مهلت مقرر پاسخ نداد؛ کمی بعد دوباره تلاش کنید.'],
     TELEGRAM_NETWORK_ERROR: [502, 'اتصال سرویس به تلگرام برقرار نشد؛ دسترسی شبکهٔ محیط اجرای Worker را بررسی کنید.'],
     TELEGRAM_INVALID_RESPONSE: [502, 'پاسخ دریافتی از تلگرام معتبر نبود؛ کمی بعد دوباره تلاش کنید.'],

@@ -11,7 +11,7 @@ const usage = (notificationsToday = 0, activeSubscribers = 0, pendingDeliveries 
 beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async request => {
     const match = /bot(\d+):.*\/(\w+)$/.exec(String(request));
-    const result = match?.[2] === 'getMe' ? {id: Number(match[1]), is_bot: true, username: `bot_${match[1]}`} : match?.[2] === 'setWebhook' ? true : {url: '', pending_update_count: 0};
+    const result = match?.[2] === 'getMe' ? {id: Number(match[1]), is_bot: true, username: `bot_${match[1]}`} : ['setWebhook', 'setMyCommands', 'setChatMenuButton'].includes(match?.[2] ?? '') ? true : {url: '', pending_update_count: 0};
     return new Response(JSON.stringify({ok: true, result}), {headers: {'content-type':'application/json'}});
   });
 });

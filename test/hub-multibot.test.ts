@@ -20,7 +20,7 @@ beforeEach(() => {
     const id = Number(/bot(\d+):/.exec(String(request))?.[1] ?? 0);
     return new Response(JSON.stringify({ok: true, result: String(request).endsWith('/getMe')
       ? {id, is_bot: true, first_name: `Bot ${id}`, username: `bot_${id}`}
-      : {message_id: ++receipt}}));
+      : /\/(setMyCommands|setChatMenuButton)$/.test(String(request)) ? true : {message_id: ++receipt}}));
   });
 });
 afterEach(() => vi.restoreAllMocks());
