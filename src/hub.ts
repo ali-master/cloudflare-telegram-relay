@@ -18,9 +18,20 @@ import {HubAutomation, type IncidentStored} from './hub-automation';
 import {DEFAULT_SUBSCRIBER_PREFERENCES, automationPolicyInput, evaluateDelivery, type Incident, type SubscriberPreferences} from './automation';
 import {formatRichDigest} from './rich-message';
 import {formatNotification, formatRichNotification, telegramCall, TelegramError} from './telegram';
+import {LEGACY_WELCOME_MESSAGE, subscriptionMenu} from './subscription-menu';
 
 type Row = Record<string, SqlStorageValue>;
 type DirectoryApplication = Pick<Application, 'id' | 'name'>;
+type PrivateCallback = {id: string; data: string; from: {id: number}; message: {message_id: number; chat: {id: number; type: 'private'}}};
+
+function privateCallback(value: unknown): PrivateCallback | null {
+  if (!value || typeof value !== 'object') return null;
+  const callback = value as Partial<PrivateCallback>;
+  return callback.message?.chat?.type === 'private' && Number.isSafeInteger(callback.message.chat.id) &&
+    callback.from?.id === callback.message.chat.id && Number.isSafeInteger(callback.message.message_id) && callback.message.message_id > 0 &&
+    typeof callback.id === 'string' && callback.id.length <= 256 && typeof callback.data === 'string'
+    ? callback as PrivateCallback : null;
+}
 
 interface NotificationRow extends Row {
   id: string;
@@ -326,12 +337,19 @@ export class NotificationHub extends DurableObject<Env> {
       this.sql.exec('CREATE INDEX IF NOT EXISTS notifications_visible_created ON notifications(purging, created_at DESC)');
       this.sql.exec('INSERT OR IGNORE INTO settings (id, body) VALUES (1, ?)', JSON.stringify(DEFAULT_SETTINGS));
       this.settings = {...DEFAULT_SETTINGS, ...JSON.parse(String(this.rows('SELECT body FROM settings WHERE id = 1')[0].body))};
+      if (this.settings.welcomeMessage === LEGACY_WELCOME_MESSAGE) {
+        this.settings.welcomeMessage = DEFAULT_SETTINGS.welcomeMessage;
+        this.sql.exec('UPDATE settings SET body = ? WHERE id = 1', JSON.stringify(this.settings));
+      }
+      const welcomeMenu = subscriptionMenu(DEFAULT_SETTINGS.welcomeMessage, true);
+      this.sql.exec("UPDATE deliveries SET rendered=?, system_payload=? WHERE notification_id IS NULL AND system_payload IS NULL AND status='pending' AND rendered=?", welcomeMenu.text, JSON.stringify({method: 'sendMessage', subscription_menu: 'active', reply_markup: welcomeMenu.reply_markup}), LEGACY_WELCOME_MESSAGE);
       this.lastCleanupAt = Number(this.rows("SELECT value FROM queue_state WHERE key = 'last_cleanup_at'")[0]?.value ?? -Infinity);
       const today = new Date(Date.now()).toISOString().slice(0, 10);
       this.sql.exec('INSERT OR IGNORE INTO daily_usage (day, notifications) SELECT ?, COUNT(*) FROM notifications WHERE created_at >= ?', today, Date.parse(`${today}T00:00:00.000Z`));
       const deliveryColumns = this.rows('PRAGMA table_info(deliveries)');
       if (!deliveryColumns.some(column => column.name === 'incident_id')) this.sql.exec('ALTER TABLE deliveries ADD COLUMN incident_id TEXT');
       if (!deliveryColumns.some(column => column.name === 'telegram_message_id')) this.sql.exec('ALTER TABLE deliveries ADD COLUMN telegram_message_id INTEGER');
+      this.sql.exec('CREATE INDEX IF NOT EXISTS delivery_chat_message ON deliveries(chat_id, telegram_message_id) WHERE telegram_message_id IS NOT NULL');
       this.sql.exec('CREATE UNIQUE INDEX IF NOT EXISTS delivery_incident_recipient ON deliveries(incident_id, chat_id) WHERE incident_id IS NOT NULL');
       this.automation = new HubAutomation(this.sql, () => this.invalidate());
       // A persisted network attempt cannot be safely repeated after an isolate restart.
@@ -1126,24 +1144,55 @@ export class NotificationHub extends DurableObject<Env> {
       LEVELS.map(level => ({text: `${prefs.levels.includes(level) ? '✓ ' : ''}${level}`, callback_data: `prefs:level:${level}`})),
       [{text: prefs.environments.length ? 'Environment: production' : 'Environment: all', callback_data: 'prefs:environment'}],
       [{text: prefs.delivery === 'digest' ? `Digest: ${prefs.digestMinutes}m` : 'Delivery: immediate', callback_data: 'prefs:digest'}, {text: `Quiet: ${prefs.quietHours.enabled ? 'on' : 'off'}`, callback_data: 'prefs:quiet'}],
-      [{text: `Critical bypass: ${prefs.criticalBypass ? 'on' : 'off'}`, callback_data: 'prefs:critical'}]
+      [{text: `Critical bypass: ${prefs.criticalBypass ? 'on' : 'off'}`, callback_data: 'prefs:critical'}],
+      [{text: '↩️ منوی اصلی', callback_data: 'menu:home'}]
     ];
     const system = {method: messageId ? 'editMessageText' : 'sendMessage', ...(messageId ? {message_id: messageId} : {}), preferences_version: prefs.version, reply_markup: {inline_keyboard: keyboard}};
     const text = `⚙️ Notification preferences\nLevels: ${prefs.levels.join(', ')}\nEnvironment: ${prefs.environments.join(', ') || 'all'}\nTimezone: ${prefs.timezone}\nQuiet hours: ${prefs.quietHours.start}–${prefs.quietHours.end}\nChange timezone: /timezone Europe/Berlin\nChange quiet hours: /quiet 22:00 08:00\nOnly applications you are allowed to receive are included.`;
     this.sql.exec('INSERT INTO deliveries (chat_id, rendered, system_payload, updated_at) VALUES (?, ?, ?, ?)', chatId, text, JSON.stringify(system), Date.now()); this.invalidate(); return true;
   }
 
+  private hasMenuReceipt(chatId: string, messageId: number, action: string): boolean {
+    return this.rows(`SELECT 1 FROM deliveries d, json_each(d.system_payload, '$.reply_markup.inline_keyboard') row,
+      json_each(row.value) button WHERE d.chat_id = ? AND d.telegram_message_id = ?
+      AND d.notification_id IS NULL AND (json_extract(d.system_payload, '$.subscription_menu') IS NOT NULL
+        OR json_extract(d.system_payload, '$.directory_version') IS NOT NULL
+        OR json_extract(d.system_payload, '$.preferences_version') IS NOT NULL)
+      AND json_extract(button.value, '$.callback_data') = ? LIMIT 1`, chatId, messageId, action).length > 0;
+  }
+
+  private queueSubscriptionPrompt(chatId: string, runtime: TenantRuntime, active: boolean, messageId?: number): boolean {
+    // Repeated /start opens one current menu instead of filling the pending queue.
+    this.sql.exec("UPDATE deliveries SET status='skipped', error='Subscription menu replaced.', updated_at=? WHERE chat_id=? AND status='pending' AND json_extract(system_payload, '$.subscription_menu') IS NOT NULL", Date.now(), chatId);
+    if (this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')") >= runtime.limits.maxPendingDeliveries) return false;
+    const menu = subscriptionMenu(this.settings.welcomeMessage || DEFAULT_SETTINGS.welcomeMessage, active);
+    const system = {method: messageId ? 'editMessageText' : 'sendMessage', ...(messageId ? {message_id: messageId} : {}), subscription_menu: active ? 'active' : 'stopped', reply_markup: menu.reply_markup};
+    this.sql.exec('INSERT INTO deliveries (chat_id, rendered, system_payload, updated_at) VALUES (?, ?, ?, ?)', chatId, menu.text, JSON.stringify(system), Date.now());
+    this.invalidate();
+    return true;
+  }
+
   async handleUpdate(update: unknown): Promise<void> {
     if (!update || typeof update !== 'object' || !Number.isSafeInteger((update as Record<string, unknown>).update_id)) return;
+    const callback = privateCallback((update as Record<string, unknown>).callback_query);
     return this.withQuota(runtime => {
       const value = update as {update_id: number; message?: {text?: string; chat?: {id?: number; type?: string}}};
       if (!runtime.enabled || runtime.botEnabled === false || this.rows('SELECT id FROM telegram_updates WHERE id = ?', value.update_id).length) return {notifications: 0, subscribers: 0, pending: 0};
       const message = value.message;
       const start = message?.chat?.type === 'private' && Number.isSafeInteger(message.chat.id) && typeof message.text === 'string' && /^\/start(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(message.text);
-      const previous = start ? this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', String(message!.chat!.id))[0] : undefined;
-      const subscribers = start && previous?.banned !== 1 && previous?.active !== 1 ? 1 : 0;
+      const resume = callback?.data === 'menu:start' && this.hasMenuReceipt(String(callback.message.chat.id), callback.message.message_id, callback.data);
+      const previous = start || resume ? this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', String(start ? message!.chat!.id : callback!.message!.chat!.id))[0] : undefined;
+      const subscribers = (start || resume && !!previous) && previous?.banned !== 1 && previous?.active !== 1 ? 1 : 0;
       return {notifications: 0, subscribers, pending: 1 + this.pendingIncidentExpansion()};
-    }, () => this.handleUpdateReserved(update));
+    }, () => this.handleUpdateReserved(update)).catch(async error => {
+      if (!callback || callback.data !== 'menu:start' || !(error instanceof Error) || !error.message.includes('SUBSCRIBER_LIMIT:') || !this.hasMenuReceipt(String(callback.message.chat.id), callback.message.message_id, callback.data)) throw error;
+      const latest = await this.runtime();
+      if (latest.enabled && latest.botEnabled && latest.botToken) {
+        try {
+          await telegramCall(latest.botToken, 'answerCallbackQuery', {callback_query_id: callback.id, text: 'ظرفیت عضویت تکمیل است؛ بعداً دوباره تلاش کنید.', show_alert: true});
+        } catch { /* No subscription was changed; Telegram may expire the callback. */ }
+      }
+    });
   }
 
   private async handleUpdateReserved(update: unknown): Promise<void> {
@@ -1151,14 +1200,7 @@ export class NotificationHub extends DurableObject<Env> {
     const value = update as Record<string, unknown>;
     if (!Number.isSafeInteger(value.update_id)) return;
     const runtime = await this.runtime();
-    const callback = value.callback_query as {
-      id?: unknown; data?: unknown; from?: { id?: unknown };
-      message?: { message_id?: unknown; chat?: { id?: unknown; type?: string } };
-    } | undefined;
-    const ownsCallback = callback?.message?.chat?.type === 'private' &&
-      Number.isSafeInteger(callback.message.chat.id) && callback.from?.id === callback.message.chat.id &&
-      Number.isSafeInteger(callback.message.message_id) && Number(callback.message.message_id) > 0 &&
-      typeof callback.id === 'string' && callback.id.length <= 256 && typeof callback.data === 'string';
+    const callback = privateCallback(value.callback_query);
     let acknowledge = false;
     let acknowledgement = 'تنظیمات دریافت اعلان ذخیره شد.';
     const outcome = await this.ctx.storage.transaction(async () => {
@@ -1168,10 +1210,48 @@ export class NotificationHub extends DurableObject<Env> {
       if (this.rows('SELECT id FROM telegram_updates WHERE id = ?', updateId).length) return;
       const now = Date.now();
       this.sql.exec('INSERT INTO telegram_updates (id, received_at) VALUES (?, ?)', updateId, now);
-      if (ownsCallback && callback) {
-        if (!runtime.enabled || runtime.botEnabled === false) return;
+      if (callback) {
         const chatId = String(callback.message!.chat!.id);
         const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
+        const menuAction = /^menu:(apps|preferences|all|stop|start|home)$/.exec(String(callback.data))?.[1];
+        if (menuAction) {
+          const messageId = Number(callback.message!.message_id);
+          acknowledge = true;
+          if (!subscriber || !this.hasMenuReceipt(chatId, messageId, String(callback.data))) {
+            acknowledgement = 'این دکمه معتبر نیست؛ منوی تازهٔ بات را باز کنید.';
+            return;
+          }
+          if (menuAction === 'stop') {
+            this.deactivate(chatId, 'Subscriber stopped notifications.');
+            acknowledgement = 'دریافت اعلان‌ها متوقف شد.';
+            if (runtime.enabled && runtime.botEnabled !== false && subscriber.banned !== 1) this.queueSubscriptionPrompt(chatId, runtime, false, messageId);
+            return;
+          }
+          if (!runtime.enabled || runtime.botEnabled === false || subscriber.banned === 1) {
+            acknowledgement = 'دریافت اعلان برای شما در دسترس نیست.';
+            return;
+          }
+          if (menuAction === 'start') {
+            if (subscriber.active !== 1 && this.count('SELECT COUNT(*) AS count FROM subscribers WHERE active = 1 AND banned = 0') >= runtime.limits.maxSubscribers) {
+              acknowledgement = 'ظرفیت عضویت تکمیل است؛ بعداً دوباره تلاش کنید.';
+              return;
+            }
+            this.sql.exec('UPDATE subscribers SET active=1, updated_at=? WHERE chat_id=?', now, chatId);
+            this.invalidate();
+          } else if (subscriber.active !== 1) {
+            acknowledgement = 'دریافت اعلان‌ها متوقف است؛ ابتدا آن را دوباره فعال کنید.';
+            return;
+          }
+          let queued = false;
+          if (menuAction === 'apps' || menuAction === 'all') {
+            if (menuAction === 'all') this.changeApplications(chatId, null);
+            queued = this.queueApplicationPrompt(chatId, this.allowedApplications(chatId), runtime, messageId);
+          } else if (menuAction === 'preferences') queued = this.queuePreferencesPrompt(chatId, runtime, messageId);
+          else queued = this.queueSubscriptionPrompt(chatId, runtime, true, messageId);
+          acknowledgement = !queued ? 'تغییر عضویت ذخیره شد؛ نمایش منو موقتاً در دسترس نیست.' : menuAction === 'start' ? 'دریافت اعلان‌ها دوباره فعال شد.' : menuAction === 'all' ? 'دریافت همهٔ اپلیکیشن‌های مجاز فعال شد.' : 'منو به‌روز شد.';
+          return;
+        }
+        if (!runtime.enabled || runtime.botEnabled === false) return;
         if (!subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
         const incidentAction = /^inc:(ack|snooze|resolve):([a-f0-9-]{36})$/.exec(String(callback.data));
         if (incidentAction) {
@@ -1234,7 +1314,7 @@ export class NotificationHub extends DurableObject<Env> {
           if (activating && this.count('SELECT COUNT(*) AS count FROM subscribers WHERE active = 1 AND banned = 0') >= runtime.limits.maxSubscribers) {
             return new AppError(429, 'SUBSCRIBER_LIMIT', 'SUBSCRIBER_LIMIT: This tenant has reached its active subscriber limit.');
           }
-          if (activating && welcome && this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending', 'sending')") >= runtime.limits.maxPendingDeliveries) {
+          if (welcome && this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending', 'sending') AND NOT (chat_id = ? AND status = 'pending' AND json_extract(system_payload, '$.subscription_menu') IS NOT NULL)", chatId) >= runtime.limits.maxPendingDeliveries) {
             return new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is no capacity for the subscription welcome message.');
           }
           this.sql.exec(`INSERT INTO subscribers (chat_id, first_name, username, active, joined_at, updated_at)
@@ -1242,9 +1322,7 @@ export class NotificationHub extends DurableObject<Env> {
                          UPDATE
                          SET
                              first_name = excluded.first_name, username = excluded.username, active = 1, updated_at = excluded.updated_at`, chatId, String(message.from?.first_name ?? '').slice(0, 200), typeof message.from?.username === 'string' ? message.from.username.slice(0, 100) : null, now, now);
-          if (activating && welcome) {
-            this.sql.exec('INSERT INTO deliveries (chat_id, rendered, updated_at) VALUES (?, ?, ?)', chatId, welcome, now);
-          }
+          if (welcome) this.queueSubscriptionPrompt(chatId, runtime, true);
           this.invalidate();
         } else if (command === 'stop') this.deactivate(chatId, 'Subscriber stopped notifications.');
         else if (command === 'preferences' || command === 'timezone' || command === 'quiet') {
@@ -1341,6 +1419,7 @@ export class NotificationHub extends DurableObject<Env> {
     if (page > 0) navigation.push({text: 'قبلی', callback_data: `apps:page:${page - 1}`});
     if ((page + 1) * 20 < applications.length) navigation.push({text: 'بعدی', callback_data: `apps:page:${page + 1}`});
     if (navigation.length) inline_keyboard.push(navigation);
+    inline_keyboard.push([{text: '↩️ منوی اصلی', callback_data: 'menu:home'}]);
     const payload = {
       method: messageId ? 'editMessageText' : 'sendMessage',
       subscriber_version: Number(subscriber.version),
@@ -1372,7 +1451,16 @@ export class NotificationHub extends DurableObject<Env> {
   /** Re-read local policy after each await; an in-flight attempt must not resurrect a revoked retry. */
   private acceptsDelivery(delivery: DeliveryRow): boolean {
     const subscriber = this.rows('SELECT active, banned, access_mode, application_mode, version FROM subscribers WHERE chat_id = ?', delivery.chat_id)[0];
-    if (!subscriber || subscriber.active !== 1 || subscriber.banned === 1) return false;
+    if (!subscriber || subscriber.banned === 1) return false;
+    if (subscriber.active !== 1) {
+      // The one permitted opt-out response edits the existing menu. It never
+      // grants an inactive subscriber eligibility for notification delivery.
+      if (delivery.notification_id || !delivery.system_payload) return false;
+      try {
+        const system = JSON.parse(delivery.system_payload);
+        return system.subscription_menu === 'stopped' && system.method === 'editMessageText' && Number.isSafeInteger(system.message_id) && system.message_id > 0;
+      } catch { return false; }
+    }
     if (delivery.notification_id) {
       return this.rows(`WITH request AS (SELECT ? AS app_id)
         SELECT 1 FROM subscribers s CROSS JOIN request r WHERE s.chat_id = ? AND ${this.recipientWhere('r.app_id')}`, delivery.application_id, delivery.chat_id).length > 0;
@@ -1380,12 +1468,14 @@ export class NotificationHub extends DurableObject<Env> {
     if (!delivery.system_payload) return true;
     try {
       const system = JSON.parse(delivery.system_payload) as {
+        subscription_menu?: string;
         preferences_version?: number;
         escalationIncident?: string;
         subscriber_version?: number;
         directory_version?: number;
         reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string }>> }
       };
+      if (system.subscription_menu === 'stopped') return false;
       if (system.preferences_version !== undefined && this.getSubscriberPreferences(delivery.chat_id).version !== system.preferences_version) return false;
       if (system.escalationIncident) {
         const incident = this.automation.getStored(system.escalationIncident);
@@ -1418,7 +1508,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   private recoverInterrupted(): void {
-    this.sql.exec("UPDATE deliveries SET status = 'pending', next_attempt = ?, updated_at = ?, error = 'Interrupted message edit will retry.' WHERE status = 'sending' AND telegram_message_id IS NOT NULL AND json_extract(system_payload, '$.method') = 'editMessageText' AND COALESCE(json_extract(system_payload, '$.was_digest'),0) = 0 AND stage_attempts < ?", Date.now()+1000, Date.now(), MAX_ATTEMPTS);
+    this.sql.exec("UPDATE deliveries SET status = 'pending', next_attempt = ?, updated_at = ?, error = 'Interrupted message edit will retry.' WHERE status = 'sending' AND (telegram_message_id IS NOT NULL OR (json_type(system_payload, '$.message_id') = 'integer' AND json_extract(system_payload, '$.message_id') > 0)) AND json_extract(system_payload, '$.method') = 'editMessageText' AND COALESCE(json_extract(system_payload, '$.was_digest'),0) = 0 AND stage_attempts < ?", Date.now()+1000, Date.now(), MAX_ATTEMPTS);
     const result = this.sql.exec(`UPDATE deliveries
                    SET status     = 'unknown',
                        error      = CASE
@@ -1474,7 +1564,7 @@ export class NotificationHub extends DurableObject<Env> {
                                                  WHERE d.status = 'pending'
                                                    AND d.next_attempt <= ?
                                                    AND s.next_send_at <= ?
-                                                   AND s.active = 1
+                                                   AND (s.active = 1 OR (d.notification_id IS NULL AND json_extract(d.system_payload, '$.subscription_menu') = 'stopped'))
                                                    AND s.banned = 0
                                                  ORDER BY d.id LIMIT 1`, now, now)[0];
         if (!delivery) break;
@@ -1677,7 +1767,7 @@ export class NotificationHub extends DurableObject<Env> {
                               FROM deliveries d
                                        JOIN subscribers s ON s.chat_id = d.chat_id
                               WHERE d.status = 'pending'
-                                AND s.active = 1
+                                AND (s.active = 1 OR (d.notification_id IS NULL AND json_extract(d.system_payload, '$.subscription_menu') = 'stopped'))
                                 AND s.banned = 0`)[0]?.due;
       const deadline = this.automation.nextDeadline();
       const deferredEdit = typeof queueDue !== 'number' && this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status NOT IN ('pending','sending') AND json_extract(system_payload, '$.incident_refresh_pending') = 1") ? now+100 : Infinity;

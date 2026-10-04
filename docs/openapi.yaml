@@ -5978,7 +5978,7 @@ components:
           type: "string"
           maxLength: 1000
           minLength: 0
-          description: "Welcome text for a new/reactivated private /start subscription. An empty string disables the welcome message."
+          description: "Plain-text welcome for private /start, including repeated starts; line breaks are preserved. Inline action buttons are attached automatically, and existing application choices and preferences are preserved. An empty string disables the automatic /start reply. The original built-in one-line default is migrated to the paragraph layout; custom and empty values are preserved."
       required:
         [ "projectName","paused","ipMode","ipRules","countryMode","countries","showCountryFlag","deliveryPerSecond","retentionDays","welcomeMessage" ]
       additionalProperties: false
@@ -6039,7 +6039,7 @@ components:
           type: "string"
           maxLength: 1000
           minLength: 0
-          description: "Welcome text for a new/reactivated private /start subscription. An empty string disables the welcome message."
+          description: "Plain-text welcome for private /start, including repeated starts; line breaks are preserved. Inline action buttons are attached automatically, and existing application choices and preferences are preserved. An empty string disables the automatic /start reply. The original built-in one-line default is migrated to the paragraph layout; custom and empty values are preserved."
       required:
         [ ]
       additionalProperties: false

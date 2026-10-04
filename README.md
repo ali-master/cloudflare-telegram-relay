@@ -129,14 +129,18 @@ See the [incident and delivery-rules guide](docs/automation.md) for setup, paylo
 
 | Telegram command | Action |
 | --- | --- |
-| `/start` | Subscribe to the bot's notifications |
+| `/start` | Subscribe and open the notification controls |
 | `/apps` | Choose which permitted applications to receive |
 | `/all` | Receive notifications from every permitted application |
 | `/stop` | Stop receiving notifications |
 | `/preferences` | Configure your delivery preferences |
 | `/timezone Asia/Tehran` | Set the time zone for your quiet hours |
 
-New and existing subscribers initially have access to all current and future applications of the bot they started. Starting one bot never subscribes someone to another bot. In **Subscribers**, admins can edit a display-name override, private notes, and the applications each subscriber may receive. These changes preserve the Telegram name, username, and chat ID. Clearing the display name restores the Telegram name.
+The `/start` reply uses short paragraphs and Telegram [inline keyboard buttons](https://core.telegram.org/bots/api#inlinekeyboardmarkup): **Choose applications**, **Delivery preferences**, **Receive all permitted applications**, and **Stop notifications**. Stopping replaces the controls with a **Reactivate** button. These buttons perform the same actions as the commands; users do not need to type a command for each action. Sending `/start` again reopens the controls without resetting existing application choices or delivery preferences.
+
+Customize the plain-text welcome message in the selected bot's **Settings**. Line breaks are preserved and the action buttons are attached automatically. An empty welcome message disables the automatic `/start` reply. The original built-in one-line message is upgraded to the new paragraph layout automatically; custom messages and an intentionally empty message are preserved.
+
+New subscribers receive all permitted current and future applications of the bot they started by default. Starting one bot never subscribes someone to another bot. In **Subscribers**, admins can edit a display-name override, private notes, and the applications each subscriber may receive. These changes preserve the Telegram name, username, and chat ID. Clearing the display name restores the Telegram name.
 
 Admin permissions and the subscriber's Telegram preferences are independent: delivery requires both to allow the application. `/all` cannot bypass admin restrictions. With admin access set to **Selected applications**, an empty selection permits no applications. With access set to **All applications**, future applications are permitted too.
 

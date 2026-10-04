@@ -1,5 +1,6 @@
 import type {NotificationHub} from './hub';
 import type {TenantRegistry} from './tenants';
+import {DEFAULT_WELCOME_MESSAGE} from './subscription-menu';
 
 export interface Env {
   HUB: DurableObjectNamespace<NotificationHub>;
@@ -213,7 +214,7 @@ export const DEFAULT_SETTINGS: Settings = {
   projectName: 'Telegram Relay', paused: false, ipMode: 'off', ipRules: [],
   countryMode: 'off', countries: [], showCountryFlag: true,
   deliveryPerSecond: 10, retentionDays: 30,
-  welcomeMessage: 'به سامانه اعلان‌ها خوش آمدید. عضویت شما فعال شد. پیش‌فرض، اعلان همهٔ اپلیکیشن‌ها را دریافت می‌کنید. برای انتخاب اپلیکیشن‌ها /apps، دریافت همه /all و توقف اعلان‌ها /stop را ارسال کنید.',
+  welcomeMessage: DEFAULT_WELCOME_MESSAGE,
 };
 
 export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'unknown' | 'skipped';

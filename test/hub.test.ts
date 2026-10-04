@@ -68,7 +68,7 @@ describe('durable membership and notification acceptance', () => {
     await subscribe(1);
     await subscribe(-100, '/start', 'supergroup');
     expect((await hub.listSubscribers(1)).total).toBe(1);
-    expect(await runInDurableObject(hub, (_, state) => state.storage.sql.exec('SELECT COUNT(*) AS count FROM deliveries WHERE notification_id IS NULL').one().count)).toBe(1);
+    expect(await runInDurableObject(hub, (_, state) => state.storage.sql.exec('SELECT COUNT(*) AS count FROM deliveries WHERE notification_id IS NULL AND status = \'pending\'').one().count)).toBe(1);
     await subscribe(1, '/stop');
     await hub.handleUpdate(start);
     expect((await hub.listSubscribers(1)).items[0].active).toBe(false);
@@ -1023,7 +1023,7 @@ describe('application audience and directory enforcement', () => {
     expect(await runInDurableObject(hub, (_, state) => state.storage.sql.exec('SELECT status FROM deliveries WHERE notification_id IS NULL').one().status)).toBe('skipped');
     await subscribe(1, '/apps');
     const menu = await runInDurableObject(hub, (_, state) => state.storage.sql.exec("SELECT system_payload FROM deliveries WHERE status = 'pending' AND notification_id IS NULL").one());
-    expect(JSON.parse(String(menu.system_payload)).reply_markup.inline_keyboard.flat()).toEqual([{text: '✅ همه اپلیکیشن‌ها', callback_data: 'apps:all'}]);
+    expect(JSON.parse(String(menu.system_payload)).reply_markup.inline_keyboard.flat()).toEqual([{text: '✅ همه اپلیکیشن‌ها', callback_data: 'apps:all'}, {text: '↩️ منوی اصلی', callback_data: 'menu:home'}]);
   });
 
   it('revokes queued audiences immediately and ignores older snapshots before and after eviction', async () => {
@@ -1185,7 +1185,7 @@ describe('subscriber application preferences', () => {
     expect(payload).not.toHaveProperty('rich_message');
     expect(payload.reply_markup.inline_keyboard.flat().map((button: {
       callback_data: string
-    }) => button.callback_data).sort()).toEqual(['apps:all', 'apps:toggle:deployments', 'apps:toggle:payments']);
+    }) => button.callback_data).sort()).toEqual(['apps:all', 'apps:toggle:deployments', 'apps:toggle:payments', 'menu:home']);
     expect((await hub.getOverview()).notifications.total).toBe(0);
   });
 });
