@@ -13,6 +13,8 @@ import {
   type NotificationInput,
   type SourceContext,
   type SubscriberUpdate,
+  type TelegramBotCreate,
+  type TelegramBotUpdate,
   type Tenant,
   type TenantCreate,
   type TenantUpdate
@@ -26,11 +28,12 @@ import {contentSecurityPolicy, dashboardAsset} from './browser-security';
 export {TenantRegistry} from './tenants';
 export {NotificationHub} from './hub';
 
-type AppEnv = { Bindings: Env; Variables: { tenant: Tenant; application: Application } };
+type AppEnv = { Bindings: Env; Variables: { tenant: Tenant; application: Application; selectedBotId: string } };
 type C = Context<AppEnv>;
 const app = new Hono<AppEnv>();
 const registry = (c: C) => c.env.TENANTS.getByName('registry');
-const hub = (c: C) => c.env.HUB.getByName(hubName(c.get('tenant')?.id ?? 'default'));
+const tenantHub = (c: C) => c.env.HUB.getByName(hubName(c.get('tenant')?.id ?? 'default'));
+const hub = (c: C) => c.env.HUB.getByName(hubName(c.get('tenant')?.id ?? 'default', c.get('selectedBotId') ?? 'default'));
 
 async function selectTenant(c: C) {
   const id = c.req.param('tenantId') ?? 'default';
@@ -42,7 +45,23 @@ async function selectTenant(c: C) {
 
 async function initializeHub(c: C) {
   const tenant = c.get('tenant');
-  await hub(c).initializeTenant(tenant.id, tenant.name);
+  await hub(c).initializeTenant(tenant.id, tenant.name, c.get('selectedBotId') ?? 'default');
+}
+
+async function selectBot(c: C, botId = c.req.query('botId') ?? 'default', requireEnabled = false) {
+  const bot = await registry(c).getBot(c.get('tenant').id, botId);
+  if (!bot) throw new AppError(404, 'BOT_NOT_FOUND', 'بات انتخاب‌شده در این Tenant پیدا نشد.');
+  c.set('selectedBotId', bot.id);
+  if (requireEnabled && !bot.enabled) throw new AppError(409, 'BOT_DISABLED', 'بات این اپلیکیشن غیرفعال است؛ برای ارسال اعلان، بات را در داشبورد فعال کنید.');
+  return bot;
+}
+
+async function selectedApplication(c: C, id: string) {
+  const application = await registry(c).getApplication(c.get('tenant').id, id);
+  if (!application || (c.req.query('botId') !== undefined && application.botId !== c.get('selectedBotId'))) {
+    throw new AppError(404, 'APPLICATION_NOT_FOUND', 'اپلیکیشن در بات انتخاب‌شده پیدا نشد.');
+  }
+  return application;
 }
 
 const keyOf = (c: C) => c.req.header('Authorization')?.replace(/^Bearer\s+/i, '') || c.req.header('X-API-Key') || '';
@@ -174,16 +193,53 @@ app.put('/api/admin/tenants/:tenantId/bot', async c => {
   if (data.expectedVersion !== undefined && (!Number.isSafeInteger(data.expectedVersion) || Number(data.expectedVersion) < 1)) throw new AppError(400, 'INVALID_TENANT', 'نسخه Tenant معتبر نیست.');
   return c.json({tenant: await registry(c).configureBot(c.req.param('tenantId'), data.botToken, data.expectedVersion as number | undefined)});
 });
+// Bot management never selects credentials from a client-supplied token or query during delivery.
+const botAdmin = new Hono<AppEnv>();
+botAdmin.use('*', async (c, next) => { await selectTenant(c); await next(); });
+botAdmin.get('/', async c => c.json(await registry(c).listBots(c.get('tenant').id, pageNumber(c.req.query('page')), c.req.query('search'))));
+botAdmin.post('/', async c => c.json(await registry(c).createBot(c.get('tenant').id, object(await jsonBody(c)) as unknown as TelegramBotCreate), 201));
+botAdmin.get('/:botId', async c => c.json({bot: await selectBot(c, c.req.param('botId'))}));
+botAdmin.patch('/:botId', async c => c.json({bot: await registry(c).updateBot(c.get('tenant').id, c.req.param('botId'), object(await jsonBody(c)) as TelegramBotUpdate)}));
+botAdmin.get('/:botId/status', async c => {
+  await selectBot(c, c.req.param('botId'));
+  return c.json(await registry(c).getBotStatus(c.get('tenant').id, false, c.get('selectedBotId')));
+});
+botAdmin.post('/:botId/webhook', async c => {
+  const bot = await selectBot(c, c.req.param('botId'), true);
+  if (!await tenantHub(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  const data = object(await jsonBody(c));
+  if (typeof data.url !== 'string' || data.url.length > 2048 || Object.keys(data).some(key => key !== 'url')) {
+    throw new AppError(400, 'INVALID_WEBHOOK', 'آدرس عمومی HTTPS وب‌هوک همین بات را وارد کنید.');
+  }
+  if (data.url.startsWith('http://')) throw new AppError(400, 'HTTPS_REQUIRED', 'وب‌هوک تلگرام به آدرس عمومی HTTPS نیاز دارد.');
+  return c.json(await registry(c).registerWebhook(c.get('tenant').id, data.url, bot.id));
+});
+app.route('/api/admin/tenants/:tenantId/bots', botAdmin);
+app.route('/api/admin/bots', botAdmin);
 const adminData = new Hono<AppEnv>();
 adminData.use('*', async (c, next) => {
   await selectTenant(c);
+  await selectBot(c);
   await initializeHub(c);
   await next();
 });
-adminData.get('/applications', async c => c.json({applications: await registry(c).listApplications(c.get('tenant').id)}));
-adminData.post('/applications', async c => c.json(await registry(c).createApplication(c.get('tenant').id, object(await jsonBody(c)) as unknown as ApplicationCreate), 201));
-adminData.patch('/applications/:applicationId', async c => c.json({application: await registry(c).updateApplication(c.get('tenant').id, c.req.param('applicationId'), object(await jsonBody(c)) as ApplicationUpdate)}));
+adminData.get('/applications', async c => {
+  const applications = await registry(c).listApplications(c.get('tenant').id);
+  return c.json({applications: c.req.query('botId') === undefined ? applications : applications.filter(application => application.botId === c.get('selectedBotId'))});
+});
+adminData.post('/applications', async c => {
+  const input = object(await jsonBody(c));
+  if (c.req.query('botId') !== undefined && input.botId !== undefined && input.botId !== c.get('selectedBotId')) {
+    throw new AppError(400, 'INVALID_APPLICATION', 'بات اپلیکیشن باید با بات انتخاب‌شده یکسان باشد.');
+  }
+  return c.json(await registry(c).createApplication(c.get('tenant').id, {...input, botId: input.botId ?? c.get('selectedBotId')} as unknown as ApplicationCreate), 201);
+});
+adminData.patch('/applications/:applicationId', async c => {
+  await selectedApplication(c, c.req.param('applicationId'));
+  return c.json({application: await registry(c).updateApplication(c.get('tenant').id, c.req.param('applicationId'), object(await jsonBody(c)) as ApplicationUpdate)});
+});
 adminData.post('/applications/:applicationId/rotate-key', async c => {
+  await selectedApplication(c, c.req.param('applicationId'));
   const data = object(await jsonBody(c));
   if (data.expectedVersion !== undefined && (!Number.isSafeInteger(data.expectedVersion) || Number(data.expectedVersion) < 1)) throw new AppError(400, 'INVALID_APPLICATION', 'نسخه اپلیکیشن معتبر نیست.');
   return c.json(await registry(c).rotateApplicationKey(c.get('tenant').id, c.req.param('applicationId'), data.expectedVersion as number | undefined));
@@ -242,11 +298,13 @@ adminData.get('/notifications/:id', async c => {
   return result ? c.json(result) : failure(c, 404, 'NOT_FOUND', 'اعلان پیدا نشد.');
 });
 adminData.post('/notifications', async c => {
-  if (!await hub(c).rateLimit('admin:send', 30, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  if (!await tenantHub(c).rateLimit('admin:send', 30, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
   const raw = object(await jsonBody(c)), source = sourceContext(c.req.raw, 'admin');
   if (typeof raw.applicationId !== 'string') throw new AppError(400, 'APPLICATION_REQUIRED', 'اپلیکیشن فرستنده را انتخاب کنید.');
-  const application = await registry(c).getApplication(c.get('tenant').id, raw.applicationId);
-  if (!application || !application.enabled) throw new AppError(400, 'APPLICATION_DISABLED', 'اپلیکیشن فرستنده موجود یا فعال نیست.');
+  const application = await selectedApplication(c, raw.applicationId);
+  if (!application.enabled) throw new AppError(400, 'APPLICATION_DISABLED', 'اپلیکیشن فرستنده فعال نیست.');
+  await selectBot(c, application.botId, true);
+  await initializeHub(c);
   const {applicationId: selectedApplicationId, ...fields} = raw;
   const input = {
     ...notificationInput({...fields, application: application.name}, source),
@@ -254,15 +312,20 @@ adminData.post('/notifications', async c => {
   };
   return c.json(await accept(c, input, source, idempotencyKey(c.req.header('Idempotency-Key')), raw.timestamp !== undefined), 202);
 });
-adminData.get('/status', async c => c.json(await registry(c).getBotStatus(c.get('tenant').id)));
-adminData.get('/usage', async c => c.json({usage: await hub(c).getUsage(), limits: c.get('tenant').limits}));
+adminData.get('/status', async c => c.json(await registry(c).getBotStatus(c.get('tenant').id, false, c.get('selectedBotId'))));
+adminData.get('/usage', async c => c.json({
+  usage: await registry(c).getTenantUsage(c.get('tenant').id),
+  botUsage: await hub(c).getUsage(),
+  limits: c.get('tenant').limits
+}));
 adminData.post('/webhook', async c => {
-  if (!await hub(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  if (!await tenantHub(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
   const origin = new URL(c.req.url).origin;
   if (!origin.startsWith('https://')) throw new AppError(400, 'HTTPS_REQUIRED', 'وب‌هوک تلگرام به آدرس عمومی HTTPS نیاز دارد.');
   const id = c.get('tenant').id;
-  const path = c.req.param('tenantId') ? `/telegram/${id}/webhook` : '/telegram/webhook';
-  return c.json(await registry(c).registerWebhook(id, `${origin}${path}`));
+  const selectedBotId = c.get('selectedBotId');
+  const path = selectedBotId === 'default' ? (c.req.param('tenantId') ? `/telegram/${id}/webhook` : '/telegram/webhook') : `/telegram/${id}/bots/${selectedBotId}/webhook`;
+  return c.json(await registry(c).registerWebhook(id, `${origin}${path}`, selectedBotId));
 });
 app.route('/api/admin/tenants/:tenantId', adminData);
 app.route('/api/admin', adminData);
@@ -276,10 +339,16 @@ ingest.use('*', async (c, next) => {
   const application = await registry(c).verifyApplicationKey(tenant.id, key);
   if (!application) return failure(c, 401, 'UNAUTHORIZED', 'API Key اپلیکیشن معتبر نیست.');
   c.set('application', application);
+  // The authenticated application chooses the bot; query/body values cannot reroute it.
+  await selectBot(c, application.botId, !['GET', 'HEAD'].includes(c.req.method));
   await initializeHub(c);
   const source = sourceContext(c.req.raw);
+  if (c.get('selectedBotId') !== 'default') {
+    await tenantHub(c).initializeTenant(tenant.id, tenant.name);
+    checkAccess(await tenantHub(c).getSettings(), source);
+  }
   checkAccess(await hub(c).getSettings(), source);
-  if (!await hub(c).rateLimit('ingest:tenant', tenant.limits.requestsPerMinute, 60)) {
+  if (!await tenantHub(c).rateLimit('ingest:tenant', tenant.limits.requestsPerMinute, 60)) {
     c.header('Retry-After', '60');
     return failure(c, 429, 'RATE_LIMITED', 'سقف درخواست این Tenant در دقیقه پر شده است.');
   }
@@ -328,14 +397,19 @@ app.route('/api/v1', ingest);
 
 async function telegramWebhook(c: C) {
   const tenant = await selectTenant(c);
-  const runtime = await registry(c).getRuntime(tenant.id);
+  const selectedBotId = c.req.param('botId') ?? 'default';
+  const runtime = await registry(c).getRuntime(tenant.id, undefined, selectedBotId);
   if (!runtime?.webhookSecret) throw new AppError(503, 'NOT_CONFIGURED', 'وب‌هوک این Tenant تنظیم نشده است.');
   if (!await equalSecret(c.req.header('X-Telegram-Bot-Api-Secret-Token') || '', runtime.webhookSecret)) return failure(c, 401, 'UNAUTHORIZED', 'وب‌هوک معتبر نیست.');
+  c.set('selectedBotId', selectedBotId);
+  // The hub blocks enrollment/replies while disabled, but still records /stop
+  // and blocked/left updates so resuming a bot cannot undo a user's opt-out.
   await initializeHub(c);
   await hub(c).handleUpdate(await jsonBody(c));
   return c.json({ok: true});
 }
 
+app.post('/telegram/:tenantId/bots/:botId/webhook', telegramWebhook);
 app.post('/telegram/:tenantId/webhook', telegramWebhook);
 app.post('/telegram/webhook', telegramWebhook);
 app.all('/api/*', c => failure(c, 404, 'NOT_FOUND', 'مسیر پیدا نشد.'));
@@ -353,8 +427,16 @@ app.onError((error, c) => {
     TENANT_DISABLED: [403, 'این Tenant غیرفعال است.'],
     STALE_TENANT: [409, 'تنظیمات Tenant تغییر کرده است؛ صفحه را تازه کنید.'],
     INVALID_TENANT: [400, 'شناسه، نام یا محدودیت‌های Tenant معتبر نیست.'],
-    BOT_ALREADY_ASSIGNED: [409, 'این بات متعلق به Tenant دیگری است.'],
-    BOT_CHANGE_REQUIRES_NEW_TENANT: [409, 'برای بات متفاوت یک Tenant جدید بسازید؛ کاربران هر بات مستقل هستند.'],
+    BOT_ALREADY_ASSIGNED: [409, 'این بات تلگرام قبلاً در سیستم ثبت شده است؛ هر بات فقط یک اتصال مستقل دارد.'],
+    BOT_CHANGE_REQUIRES_NEW_TENANT: [409, 'برای هویت تلگرام متفاوت، از بخش بات‌ها یک بات جدید اضافه کنید.'],
+    BOT_CHANGE_REQUIRES_NEW_BOT: [409, 'این توکن متعلق به بات دیگری است؛ آن را به‌عنوان یک بات جدید اضافه کنید.'],
+    BOT_NOT_FOUND: [404, 'بات انتخاب‌شده در این Tenant پیدا نشد.'],
+    BOT_EXISTS: [409, 'این شناسهٔ بات قبلاً در این Tenant ثبت شده است.'],
+    BOT_DISABLED: [409, 'بات این اپلیکیشن غیرفعال است؛ برای ارسال اعلان، بات را در داشبورد فعال کنید.'],
+    INVALID_BOT: [400, 'شناسه، نام یا تنظیمات بات معتبر نیست.'],
+    STALE_BOT: [409, 'تنظیمات بات تغییر کرده است؛ اطلاعات جدید را بارگیری کنید.'],
+    INVALID_WEBHOOK: [400, 'آدرس عمومی HTTPS وب‌هوک همین بات را وارد کنید.'],
+    APPLICATION_BOT_IMMUTABLE: [409, 'بات اپلیکیشن پس از ساخت قابل تغییر نیست؛ برای بات دیگر یک اپلیکیشن جدید بسازید.'],
     INVALID_BOT_TOKEN: [400, 'تلگرام BOT_TOKEN را تأیید نکرد؛ توکن معتبر بات را وارد کنید.'],
     TELEGRAM_UNAVAILABLE: [502, 'ارتباط با تلگرام برقرار نشد؛ دوباره تلاش کنید.'],
     TELEGRAM_TIMEOUT: [504, 'تلگرام در مهلت مقرر پاسخ نداد؛ کمی بعد دوباره تلاش کنید.'],
@@ -362,7 +444,7 @@ app.onError((error, c) => {
     TELEGRAM_INVALID_RESPONSE: [502, 'پاسخ دریافتی از تلگرام معتبر نبود؛ کمی بعد دوباره تلاش کنید.'],
     TELEGRAM_UPSTREAM_ERROR: [502, 'تلگرام موقتاً در دسترس نیست؛ کمی بعد دوباره تلاش کنید.'],
     TELEGRAM_RATE_LIMITED: [429, 'تلگرام تعداد درخواست‌ها را محدود کرده است؛ کمی صبر کنید و دوباره تلاش کنید.'],
-    BOT_NOT_CONFIGURED: [503, 'ابتدا BOT_TOKEN را در تنظیمات این Tenant ذخیره کنید.'],
+    BOT_NOT_CONFIGURED: [503, 'بات این اپلیکیشن هنوز متصل نشده است؛ توکن آن را در بخش بات‌ها تنظیم کنید.'],
     APPLICATION_NOT_FOUND: [404, 'اپلیکیشن پیدا نشد.'],
     APPLICATION_EXISTS: [409, 'این شناسه اپلیکیشن قبلاً ثبت شده است.'],
     APPLICATION_LIMIT: [409, 'هر Tenant حداکثر ۱۰۰ اپلیکیشن دارد.'],
@@ -386,6 +468,9 @@ app.onError((error, c) => {
     INCIDENT_RESOLVED: [409, 'این رخداد قبلاً بسته شده است.'],
     INCIDENT_FORBIDDEN: [403, 'دسترسی رسیدگی به این رخداد را ندارید.'],
     DAILY_LIMIT: [429, 'سهمیه اعلان روزانه این Tenant پر شده است.'],
+    TENANT_DAILY_LIMIT: [429, 'سهمیهٔ روزانهٔ مشترک بات‌های این Tenant پر شده است.'],
+    STALE_QUOTA: [409, 'مصرف سهمیه هم‌زمان تغییر کرده است؛ کمی بعد دوباره تلاش کنید.'],
+    INVALID_QUOTA: [400, 'اطلاعات سهمیه معتبر نیست.'],
     SUBSCRIBER_LIMIT: [429, 'ظرفیت اعضای این Tenant پر شده است.'],
     QUEUE_LIMIT: [429, 'ظرفیت صف ارسال این Tenant پر شده است.'],
   };

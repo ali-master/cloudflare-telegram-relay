@@ -1,6 +1,6 @@
 # Incident response and delivery rules
 
-The relay can group related alerts, track who is handling an incident, and batch lower-priority notifications into digests. Everything belongs to one tenant. Application policies inherit their tenant's defaults until you save an override.
+The relay can group related alerts, track who is handling an incident, and batch lower-priority notifications into digests. Each bot has isolated incidents, policies, responders, and recipient preferences inside its tenant. Application policies inherit their bot's defaults until you save an override.
 
 Grouping, escalation, quiet hours, and digest delivery are off by default. Existing producers can keep sending the same payloads.
 
@@ -8,8 +8,8 @@ Incident tracking becomes active when the effective policy enables grouping or e
 
 ## 1. Set up an application
 
-1. Select the tenant in the dashboard, then open **قوانین ارسال**.
-2. Choose tenant defaults or an application. Saving an application creates its override; resetting it restores inheritance.
+1. Select the tenant and bot in the dashboard, then open **قوانین ارسال**.
+2. Choose bot defaults or an application. Saving an application creates its override; resetting it restores inheritance.
 3. Enable grouping and choose a window between 30 seconds and 24 hours. The window starts at the first accepted occurrence; later repeats do not extend it.
 4. Choose responders and, optionally, an ordered escalation list and delay.
 5. Add delivery rules and use the preview to check a sample application's level, environment, and recipient before enabling them.
@@ -100,7 +100,7 @@ In **Subscribers**, open a recipient's delivery preferences to configure:
 - Quiet hours, including overnight windows such as `22:00`–`08:00`.
 - Whether critical alerts bypass quiet hours and digest delays.
 
-Critical bypass does not override level/environment filters, an explicit mute rule, application permissions, a disabled tenant, or a subscriber ban.
+Critical bypass does not override level/environment filters, an explicit mute rule, application permissions, a disabled tenant or bot, or a subscriber ban.
 
 Subscribers can configure their private bot chat with:
 
@@ -118,16 +118,18 @@ Schedules use the selected local time zone, including daylight-saving transition
 
 These endpoints require the dashboard session cookie. All mutations also require an exact same-origin `Origin` header. Application ingestion keys cannot administer policies, preferences, or incidents.
 
-All paths below are relative to `/api/admin/tenants/{tenantId}`. The existing `/api/admin` alias addresses the default tenant.
+All paths below are relative to `/api/admin/tenants/{tenantId}`. The existing `/api/admin` alias addresses the default tenant. Append `botId={botId}` to every request below (using `&` when there is already a query). Omitting it selects the legacy `default` bot. Application and subscriber IDs must belong to that bot.
+
+Disabling a bot pauses its delivery, digests, and escalation, and incident actions return `409 BOT_DISABLED`. Retained reports remain readable. After re-enabling, the queue rechecks current audience permissions before sending; deadlines that became due while disabled can then run.
 
 | Method | Path | Response / purpose |
 | --- | --- | --- |
-| GET | `/automation?applicationId=...` | `{policy, inherited}`; omit the application for tenant defaults. |
+| GET | `/automation?applicationId=...` | `{policy, inherited}`; omit the application for bot defaults. |
 | PUT | `/automation?applicationId=...` | Save fields with `expectedVersion`; return `{policy, inherited}`. |
 | DELETE | `/automation?applicationId=...&expectedVersion=...` | Reset an application's override to inheritance. |
 | POST | `/automation/preview` | Evaluate `{applicationId, chatId?, level, environment?, tags?, timestamp?}`. |
 | GET | `/incidents?page=1&status=open&applicationId=...` | Paginated incidents; status and application filters are optional. |
-| GET | `/incidents/overview` | Tenant incident counts, occurrences, escalations, and acknowledgment time. |
+| GET | `/incidents/overview` | Selected-bot incident counts, occurrences, escalations, and acknowledgment time. |
 | GET | `/incidents/{id}` | `{incident, timeline}`. |
 | POST | `/incidents/{id}/actions` | `{action, expectedVersion, minutes?}`; actions: `acknowledge`, `snooze`, `resolve`. |
 | GET | `/subscribers/{chatId}/preferences` | `{preferences}`. |
@@ -135,4 +137,4 @@ All paths below are relative to `/api/admin/tenants/{tenantId}`. The existing `/
 
 The preview response is `{mode, reason, nextAt}`. `nextAt` is a Unix timestamp in milliseconds or `null`. Incident timestamps are ISO 8601 strings; optional timestamps are `null` when not applicable.
 
-Queues and incident actions remain subject to the tenant's quotas and delivery rate. A queued notification or a scheduled escalation is not proof of Telegram delivery; inspect delivery reports for the actual result.
+Queues and incident actions remain subject to shared tenant quotas and the selected bot's delivery rate. A queued notification or a scheduled escalation is not proof of Telegram delivery; inspect delivery reports for the actual result.

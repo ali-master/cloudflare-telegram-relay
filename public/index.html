@@ -16,8 +16,10 @@
     <link rel="stylesheet" href="/audit.css">
     <link rel="stylesheet" href="/api-guide.css">
     <link rel="stylesheet" href="/automation.css">
+    <link rel="stylesheet" href="/bots.css">
     <script src="/selects.js" defer></script>
     <script src="/automation.js" defer></script>
+    <script src="/bots.js" defer></script>
     <script src="/app.js" defer></script>
 </head>
 <body>
@@ -226,6 +228,7 @@
                     <use href="#i-code"/>
                 </svg>
                 <span>اپلیکیشن‌ها</span></button>
+            <button id="tab-bots" class="nav-item" type="button" role="tab" aria-selected="false" aria-controls="panel-bots" tabindex="-1" data-tab="bots"><svg class="icon"><use href="#i-relay"/></svg><span>بات‌های تلگرام</span></button>
             <button id="tab-tenants" class="nav-item" type="button" role="tab" aria-selected="false"
                     aria-controls="panel-tenants" tabindex="-1" data-tab="tenants">
                 <svg class="icon">
@@ -274,6 +277,7 @@
                         </div>
                     </div>
                 </div>
+                <button id="bot-scope-button" class="bot-scope-button" type="button" aria-haspopup="dialog" aria-controls="bot-picker-dialog" disabled><span class="bot-scope-icon"><svg class="icon"><use href="#i-relay"/></svg></span><span class="bot-scope-copy"><span class="header-caption">بات انتخاب‌شده</span><strong id="bot-scope-name">در حال دریافت…</strong></span><span id="bot-scope-dot" class="bot-state-dot" aria-hidden="true"></span><svg class="icon bot-scope-chevron"><use href="#i-chevron"/></svg></button>
                 <div class="header-section"><span class="header-caption">مرکز کنترل</span><strong
                         id="breadcrumb-current">نمای کلی</strong></div>
             </div>
@@ -299,6 +303,7 @@
             </div>
         </header>
         <main class="main-content">
+            <div id="bot-scope-warning" class="notice bot-scope-warning" role="status" hidden></div>
             <div id="global-error" class="notice error-notice" role="alert" hidden></div>
             <section id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" class="panel">
                 <div class="page-heading">
@@ -469,7 +474,7 @@
                 <div class="page-heading">
                     <div><span class="eyebrow muted">YOUR AUDIENCE</span>
                         <h1>یک بات، یک تیم باخبر<span class="accent">.</span></h1>
-                        <p>پروفایل، عضویت و دسترسی هر مشترک به اپلیکیشن‌های این فضا.</p></div>
+                        <p>پروفایل، عضویت و دسترسی هر مشترک به اپلیکیشن‌های بات انتخاب‌شده.</p></div>
                 </div>
                 <div class="notice mint-notice">
                     <svg class="icon">
@@ -530,7 +535,7 @@
                 <article class="card connection-settings">
                     <div class="card-header">
                         <div><h2>اتصال به تلگرام</h2>
-                            <p>توکن و اتصال بات مخصوص فضای اعلان انتخاب‌شده است.</p></div>
+                            <p>توکن، وب‌هوک و تنظیمات این صفحه متعلق به بات انتخاب‌شده در بالای داشبورد است.</p></div>
                         <span id="bot-status-badge" class="badge neutral">در حال بررسی</span></div>
                     <div class="settings-card-body">
                         <form id="bot-token-form" class="bot-token-form">
@@ -540,7 +545,7 @@
                                            spellcheck="false" required
                                            placeholder="توکن دریافت‌شده از BotFather"><small>توکن فعلی هیچ‌گاه نمایش
                                 داده نمی‌شود. توکن جدید ابتدا با تلگرام بررسی می‌شود؛ اتصال به یک بات متفاوت نیاز به
-                                ساخت فضای جدید دارد.</small></div>
+                                افزودن بات جدید از صفحهٔ «بات‌های تلگرام» دارد.</small></div>
                             <div class="bot-token-actions"><p id="bot-token-feedback" class="muted" role="status">تعویض
                                 توکن همان بات، مشترکان را حفظ می‌کند.</p>
                                 <button id="save-bot-token" type="submit" class="button primary">
@@ -618,7 +623,7 @@
                                 <svg class="icon">
                                     <use href="#i-lock"/>
                                 </svg>
-                                <span>محدودیت IP و کشور فقط روی API دریافت اعلان اعمال می‌شود. ورود مدیر با کلید مدیریت انجام می‌شود و وب‌هوک تلگرام مستقل است.</span>
+                                <span>محدودیت IP و کشور فقط روی API دریافت اعلان اعمال می‌شود. سیاست بات پیش‌فرض برای همهٔ بات‌های این فضا اعمال می‌شود؛ محدودیت بات‌های دیگر به آن اضافه می‌شود. ورود مدیر و وب‌هوک تلگرام مستقل هستند.</span>
                             </div>
                             <div class="form-grid">
                                 <div class="field"><label for="ip-mode">سیاست IP</label><select id="ip-mode"
@@ -712,6 +717,7 @@
                         <button type="button" class="text-button" data-api-tab="settings">اتصال بات</button>
                     </div>
                 </div>
+                <div class="api-bot-context" id="api-bot-context"></div><div class="notice compact"><svg class="icon"><use href="#i-alert"/></svg><span>اگر بات اپلیکیشن غیرفعال باشد، درخواست ارسال با <bdi>HTTP 409 · BOT_DISABLED</bdi> رد می‌شود. کلید اپلیکیشن، بات مقصد را تعیین می‌کند؛ نیازی به ارسال توکن بات یا شناسهٔ بات در درخواست نیست.</span></div>
                 <div class="api-grid">
                     <article class="card api-example">
                         <div class="card-header">
@@ -736,9 +742,8 @@
                         <div class="card-header"><h2>پیش از اولین درخواست</h2></div>
                         <ol class="steps">
                             <li><span>۱</span>
-                                <div><strong>بات همین Tenant را متصل کنید</strong>
-                                    <p>در «تنظیمات»، توکن بات را ذخیره و وب‌هوک را ثبت کنید. برای هر Tenant یک بات
-                                        جداگانه داشته باشید.</p></div>
+                                <div><strong>بات مورد نظر را در همین Tenant متصل کنید</strong>
+                                    <p>در «بات‌های تلگرام»، یک یا چند بات اضافه کنید. بات مورد نظر را انتخاب و وب‌هوک همان بات را ثبت کنید.</p></div>
                             </li>
                             <li><span>۲</span>
                                 <div><strong>اپلیکیشن و کلید ارسال بسازید</strong>
@@ -749,7 +754,7 @@
                                 <div><strong>مخاطبان، بات را Start کنند</strong>
                                     <p>کاربر با
                                         <bdi>/start</bdi>
-                                        عضو بات همین فضا می‌شود. پیش‌فرض، دریافت همهٔ اپلیکیشن‌هاست؛ با
+                                        عضو همان بات مقصد می‌شود. پیش‌فرض، دریافت همهٔ اپلیکیشن‌هاست؛ با
                                         <bdi>/apps</bdi>
                                         انتخاب می‌کند و با
                                         <bdi>/all</bdi>
@@ -1114,7 +1119,7 @@
                 </div>
                 <article class="card">
                     <div class="card-header">
-                        <div><h2>اپلیکیشن‌های این فضا</h2>
+                        <div><h2>اپلیکیشن‌های این بات</h2>
                             <p id="applications-count">در حال دریافت اطلاعات</p></div>
                         <button id="reload-applications" class="icon-button" type="button"
                                 aria-label="به‌روزرسانی اپلیکیشن‌ها">
@@ -1126,11 +1131,16 @@
                     <div id="applications-table" class="table-container"></div>
                 </article>
             </section>
+            <section id="panel-bots" role="tabpanel" aria-labelledby="tab-bots" class="panel" hidden>
+                <div class="bots-hero"><div><span class="eyebrow muted">ONE SPACE. MANY CONNECTIONS.</span><h1>هر بات، یک مسیر مستقل<span class="accent">.</span></h1><p>بات‌های تیم را کنار هم مدیریت کنید؛ هرکدام با اپلیکیشن‌ها، مخاطبان و گزارش‌های خودش.</p></div><button id="create-bot" class="button primary" type="button"><svg class="icon"><use href="#i-plus"/></svg>افزودن بات</button></div>
+                <div class="bots-principles"><div><span>۰۱</span><strong>اتصال مستقل</strong><small>توکن و وب‌هوک مخصوص هر بات</small></div><div><span>۰۲</span><strong>مخاطبان جداگانه</strong><small>انتخاب‌ها و دسترسی‌ها در همان بات</small></div><div><span>۰۳</span><strong>توقف با یک کلید</strong><small>توقف ارسال همهٔ اپلیکیشن‌های بات</small></div></div>
+                <article class="card bots-workspace"><div class="bots-toolbar"><div><h2>بات‌های این فضا</h2><p id="bots-count" class="muted" role="status"></p></div><div class="bots-tools"><label class="visually-hidden" for="bots-search">جست‌وجوی بات</label><input type="search" id="bots-search" placeholder="نام، شناسه یا نام کاربری بات…" autocomplete="off"><button id="reload-bots" class="icon-button" type="button" aria-label="به‌روزرسانی بات‌ها"><svg class="icon"><use href="#i-refresh"/></svg></button></div></div><div id="bots-error" class="form-error" role="alert" hidden></div><div id="bots-list" class="bots-grid"></div><div id="bots-pagination" class="pagination"></div></article>
+            </section>
             <section id="panel-tenants" role="tabpanel" aria-labelledby="tab-tenants" class="panel" hidden>
                 <div class="page-heading">
                     <div><span class="eyebrow muted">ISOLATED NOTIFICATION SPACES</span>
                         <h1>هر سرویس، فضای خودش<span class="accent">.</span></h1>
-                        <p>بات، اپلیکیشن‌ها، مشترکان، گزارش‌ها و سهمیهٔ هر فضا مستقل هستند.</p></div>
+                        <p>بات‌ها، اپلیکیشن‌ها، مشترکان، گزارش‌ها و سهمیهٔ هر فضا مستقل هستند.</p></div>
                     <button type="button" id="create-tenant" class="button primary">
                         <svg class="icon">
                             <use href="#i-plus"/>
@@ -1175,7 +1185,7 @@
             </section>
             <section id="panel-automation" role="tabpanel" aria-labelledby="tab-automation" class="panel automation-panel" hidden>
                 <div class="auto-hero"><div><span class="eyebrow">THE RIGHT SIGNAL. THE RIGHT MOMENT.</span><h1>هر پیام، به‌وقت خودش.</h1><p>هشدارهای تکراری را جمع کنید، مسئول بعدی را مشخص کنید و برای پیام‌های کم‌اهمیت، زمان مناسبی بسازید.</p></div><div class="auto-orbit" aria-hidden="true"><svg class="icon"><use href="#i-relay"/></svg></div></div>
-                <div class="auto-scope"><div class="field"><label for="automation-scope">این قوانین برای</label><select id="automation-scope"><option value="">پیش‌فرض تمام اپلیکیشن‌های فضا</option></select></div><div class="auto-scope-note"><span id="automation-inheritance" class="badge neutral">پیش‌فرض فضا</span><p id="automation-scope-note">اپلیکیشن‌ها می‌توانند قوانین اختصاصی داشته باشند.</p></div><button id="automation-reset" type="button" class="button secondary small-button" hidden>بازگشت به قوانین فضا</button></div>
+                <div class="auto-scope"><div class="field"><label for="automation-scope">این قوانین برای</label><select id="automation-scope"><option value="">پیش‌فرض تمام اپلیکیشن‌های بات</option></select></div><div class="auto-scope-note"><span id="automation-inheritance" class="badge neutral">پیش‌فرض بات</span><p id="automation-scope-note">اپلیکیشن‌ها می‌توانند قوانین اختصاصی داشته باشند.</p></div><button id="automation-reset" type="button" class="button secondary small-button" hidden>بازگشت به قوانین بات</button></div>
                 <div id="automation-loading" class="auto-loading" role="status"></div><p id="automation-error" class="form-error" role="alert" hidden></p>
                 <div id="automation-content" class="auto-layout" hidden>
                     <form id="automation-form" class="auto-main">
@@ -1370,6 +1380,10 @@
         </div>
     </form>
 </dialog>
+<dialog id="bot-picker-dialog" class="modal bot-picker-modal" aria-labelledby="bot-picker-heading"><div class="modal-heading"><div><span class="eyebrow muted">SWITCH CONNECTION</span><h2 id="bot-picker-heading">انتخاب بات</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="بستن"><svg class="icon"><use href="#i-close"/></svg></button></div><p class="muted">گزارش‌ها، کاربران و اپلیکیشن‌ها برای بات انتخاب‌شده نمایش داده می‌شوند.</p><label class="visually-hidden" for="bot-picker-search">جست‌وجوی بات در این فضا</label><input id="bot-picker-search" type="search" placeholder="جست‌وجو در همهٔ بات‌های این فضا…" autocomplete="off"><div id="bot-picker-error" class="form-error" role="alert" hidden></div><div id="bot-picker-list" class="bot-picker-list"></div><div id="bot-picker-pagination" class="pagination"></div><button id="bot-picker-manage" class="button secondary full" type="button">مدیریت بات‌های این فضا</button></dialog>
+<dialog id="bot-editor-dialog" class="modal bot-editor-modal" aria-labelledby="bot-editor-heading"><div class="modal-heading"><div><span class="eyebrow muted">TELEGRAM CONNECTION</span><h2 id="bot-editor-heading">افزودن بات</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="بستن"><svg class="icon"><use href="#i-close"/></svg></button></div><form id="bot-editor-form"><p id="bot-editor-context" class="muted"></p><div class="form-grid"><div class="field"><label for="bot-editor-name">نام نمایشی</label><input id="bot-editor-name" name="name" maxlength="80" required placeholder="هشدارهای زیرساخت"></div><div class="field"><label for="bot-editor-id">شناسهٔ بات در این فضا</label><input id="bot-editor-id" name="id" required minlength="2" maxlength="48" pattern="[a-z0-9][a-z0-9\-]{0,46}[a-z0-9]" dir="ltr" placeholder="infra-alerts"><small>حروف کوچک انگلیسی، عدد و خط تیره؛ پس از ساخت ثابت می‌ماند.</small></div></div><div class="field"><label for="bot-editor-token">توکن بات</label><input id="bot-editor-token" type="password" autocomplete="new-password" spellcheck="false" placeholder="توکن دریافت‌شده از BotFather"><small id="bot-editor-token-note">توکن بررسی می‌شود و پس از ذخیره نمایش داده نخواهد شد.</small></div><label id="bot-editor-enabled-row" class="switch-row separated" for="bot-editor-enabled"><span><strong>بات فعال باشد</strong><small>بات غیرفعال هیچ اعلان جدیدی از اپلیکیشن‌هایش نمی‌پذیرد.</small></span><input type="checkbox" id="bot-editor-enabled" role="switch" checked><span class="switch" aria-hidden="true"></span></label><div id="bot-editor-warning" class="notice compact" hidden><svg class="icon"><use href="#i-alert"/></svg><span>ارسال همهٔ اپلیکیشن‌های این بات متوقف می‌شود. اپلیکیشن‌ها و مخاطبان حذف نمی‌شوند.</span></div><p id="bot-editor-error" class="form-error" role="alert" hidden></p><div class="modal-actions"><button id="bot-editor-reload" class="button secondary" type="button" hidden>دریافت نسخهٔ تازه</button><button class="button secondary" type="button" data-close-dialog>انصراف</button><button id="save-bot" class="button primary" type="submit">بررسی و افزودن بات</button></div></form></dialog>
+<dialog id="bot-disable-dialog" class="modal bot-confirm-modal" aria-labelledby="bot-disable-heading"><div class="modal-heading"><h2 id="bot-disable-heading">توقف ارسال این بات</h2></div><p id="bot-disable-detail"></p><div class="notice compact"><svg class="icon"><use href="#i-alert"/></svg><span>درخواست جدید اپلیکیشن‌های این بات با خطای <bdi>BOT_DISABLED</bdi> رد خواهد شد. وضعیت فعال‌بودن خود اپلیکیشن‌ها حفظ می‌شود.</span></div><p id="bot-disable-error" class="form-error" role="alert" hidden></p><div class="modal-actions"><button id="bot-disable-cancel" class="button secondary" type="button">ادامهٔ ارسال</button><button id="bot-disable-confirm" class="button danger-button" type="button">غیرفعال‌کردن بات</button></div></dialog>
+<dialog id="scope-discard-dialog" class="modal bot-confirm-modal" aria-labelledby="scope-discard-heading"><div class="modal-heading"><h2 id="scope-discard-heading">تغییرات هنوز ذخیره نشده‌اند</h2></div><p>با ادامه، تغییرات این فرم کنار گذاشته می‌شوند.</p><div class="modal-actions"><button id="scope-discard-cancel" type="button" class="button secondary">ماندن و ادامهٔ ویرایش</button><button id="scope-discard-confirm" type="button" class="button primary">ادامه بدون ذخیره</button></div></dialog>
 <dialog id="application-dialog" class="modal application-profile" aria-labelledby="application-dialog-heading">
     <div class="modal-heading">
         <div><span class="eyebrow muted">APPLICATION IDENTITY</span>
@@ -1380,7 +1394,7 @@
             </svg>
         </button>
     </div>
-    <form id="application-form"><p id="application-tenant-name" class="muted application-space"></p>
+    <form id="application-form"><p id="application-tenant-name" class="muted application-space"></p><div id="application-bot-binding" class="bot-binding-note"></div>
         <div class="form-grid">
             <div class="field"><label for="application-name">نام اپلیکیشن</label><input id="application-name"
                                                                                         name="name" required
@@ -1407,7 +1421,7 @@
             <fieldset class="subscriber-access-modes">
                 <legend>دامنهٔ مخاطبان اپلیکیشن</legend>
                 <label class="subscriber-mode-card"><input id="application-audience-all" type="radio"
-                                                           name="applicationAudienceMode" value="all"><span><strong>همهٔ مشترکان</strong><small>همهٔ کاربران فعلی و اعضای آیندهٔ این فضا</small></span>
+                                                           name="applicationAudienceMode" value="all"><span><strong>همهٔ مشترکان</strong><small>همهٔ کاربران فعلی و اعضای آیندهٔ این بات</small></span>
                     <svg class="icon">
                         <use href="#i-globe"/>
                     </svg>
@@ -1578,7 +1592,7 @@
             <svg class="icon">
                 <use href="#i-users"/>
             </svg>
-            <span>این اعلان برای مشترکان فعال این فضا که دریافت اعلان‌های این اپلیکیشن را انتخاب کرده‌اند ارسال می‌شود.</span>
+            <span>این اعلان برای مشترکان فعال بات انتخاب‌شده که دریافت اعلان‌های این اپلیکیشن را انتخاب کرده‌اند ارسال می‌شود.</span>
         </div>
         <div class="form-grid">
             <div class="field"><label for="compose-app">اپلیکیشن ارسال‌کننده</label><select id="compose-app"

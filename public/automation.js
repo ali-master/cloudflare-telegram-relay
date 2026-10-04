@@ -19,8 +19,8 @@ window.RelayAutomation = (() => {
   const el = (tag, style, text) => ui.node(tag, style, text);
   const number = value => ui.count(value);
   const message = (selector, text) => ui.showError(selector, text);
-  const stamp = () => ({epoch: ui.state.epoch, tenant: ui.state.tenantId});
-  const current = token => ui.state.authenticated && token.epoch === ui.state.epoch && token.tenant === ui.state.tenantId;
+  const stamp = () => ({epoch: ui.state.epoch, tenant: ui.state.tenantId, bot: ui.state.botId});
+  const current = token => ui.state.authenticated && token.epoch === ui.state.epoch && token.tenant === ui.state.tenantId && token.bot === ui.state.botId;
   const path = suffix => ui.tenantPath(suffix);
   const clone = value => JSON.parse(JSON.stringify(value));
   const split = value => [...new Set(value.split(/[,،\n]/).map(item => item.trim()).filter(Boolean))];
@@ -180,7 +180,7 @@ window.RelayAutomation = (() => {
     $('#auto-preview-chat').value = '';
     for (const id of ['#incident-list', '#incident-stats', '#incident-pagination', '#incident-detail', '#auto-rules', '#auto-responders', '#auto-escalation-targets', '#auto-people-list', '#auto-people-pagination']) $(id).replaceChildren();
     for (const id of ['#automation-error', '#incidents-error', '#auto-preview-error', '#delivery-preferences-error', '#incident-action-error']) message(id, '');
-    setOptions('#automation-scope', [], 'پیش‌فرض تمام اپلیکیشن‌های فضا', '');
+    setOptions('#automation-scope', [], 'پیش‌فرض تمام اپلیکیشن‌های بات', '');
     setOptions('#incident-app-filter', [], 'همهٔ اپلیکیشن‌ها', '');
     setOptions('#auto-preview-app', [], 'اپلیکیشنی ثبت نشده', '');
     renderStatusFilters();
@@ -365,7 +365,7 @@ window.RelayAutomation = (() => {
     try {
       const [result, apps] = await Promise.all([ui.api(policyPath()), applications(), initialPeopleNames()]);
       if (!current(token) || request !== model.policyRequest || scope !== model.scope) return;
-      setOptions('#automation-scope', apps, 'پیش‌فرض تمام اپلیکیشن‌های فضا', scope);
+      setOptions('#automation-scope', apps, 'پیش‌فرض تمام اپلیکیشن‌های بات', scope);
       setOptions('#auto-preview-app', apps, apps.length ? null : 'اپلیکیشنی ثبت نشده', scope || $('#auto-preview-app').value);
       model.policy = clone(result.policy);
       model.original = JSON.stringify(model.policy);
@@ -388,9 +388,9 @@ window.RelayAutomation = (() => {
     $('#auto-group-window').value = policy.grouping.windowSeconds;
     $('#auto-escalation-enabled').checked = policy.escalation.enabled;
     $('#auto-escalation-delay').value = policy.escalation.afterMinutes;
-    $('#automation-inheritance').textContent = model.scope ? model.inherited ? 'ارث‌بری از فضا' : 'قوانین اختصاصی اپلیکیشن' : 'پیش‌فرض فضا';
+    $('#automation-inheritance').textContent = model.scope ? model.inherited ? 'ارث‌بری از بات' : 'قوانین اختصاصی اپلیکیشن' : 'پیش‌فرض بات';
     $('#automation-inheritance').className = `badge ${model.scope && !model.inherited ? 'info' : 'neutral'}`;
-    $('#automation-scope-note').textContent = model.scope ? model.inherited ? 'با ذخیره، قوانین اختصاصی برای این اپلیکیشن ساخته می‌شوند.' : 'این اپلیکیشن مستقل از پیش‌فرض فضا تصمیم می‌گیرد.' : 'اپلیکیشن‌های بدون قانون اختصاصی، همین تنظیمات را اجرا می‌کنند.';
+    $('#automation-scope-note').textContent = model.scope ? model.inherited ? 'با ذخیره، قوانین اختصاصی برای این اپلیکیشن ساخته می‌شوند.' : 'این اپلیکیشن مستقل از پیش‌فرض بات تصمیم می‌گیرد.' : 'اپلیکیشن‌های بدون قانون اختصاصی، همین تنظیمات را اجرا می‌کنند.';
     $('#automation-reset').hidden = !model.scope || model.inherited;
     renderPeopleSelections();
     renderRules();
@@ -514,7 +514,7 @@ window.RelayAutomation = (() => {
       const result = await ui.api(path(`automation?${query}`), {method: 'DELETE'});
       if (!current(token)) return;
       model.policy = clone(result.policy); model.original = JSON.stringify(model.policy); model.inherited = result.inherited; model.dirty = model.conflict = false;
-      ui.toast('اپلیکیشن دوباره از قوانین فضا پیروی می‌کند.');
+      ui.toast('اپلیکیشن دوباره از قوانین بات پیروی می‌کند.');
     } catch (error) {
       if (!current(token) || error.stale) return;
       model.conflict = error.status === 409;

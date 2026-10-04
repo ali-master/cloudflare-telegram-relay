@@ -62,6 +62,7 @@ export class ApplicationStore {
         const stored = JSON.parse(row.data) as StoredApplication;
         return [row.id, {
           ...stored,
+          botId: stored.botId ?? 'default',
           audienceMode: stored.audienceMode ?? 'all',
           audienceChatIds: stored.audienceChatIds ?? [],
           showInDirectory: stored.showInDirectory ?? true
@@ -91,12 +92,12 @@ export class ApplicationStore {
     return application;
   }
 
-  list(tenantId: string): Application[] {
-    return [...this.rows(tenantId).values()].map(application => this.public(application));
+  list(tenantId: string, botId?: string): Application[] {
+    return [...this.rows(tenantId).values()].filter(application => botId === undefined || application.botId === botId).map(application => this.public(application));
   }
 
-  revision(tenantId: string): string {
-    return [...this.rows(tenantId).values()].map(application => `${application.id}:${application.version}`).sort().join(',');
+  revision(tenantId: string, botId?: string): string {
+    return [...this.rows(tenantId).values()].filter(application => botId === undefined || application.botId === botId).map(application => `${application.id}:${application.version}`).sort().join(',');
   }
 
   get(tenantId: string, id: string): Application | null {
@@ -107,6 +108,8 @@ export class ApplicationStore {
   async create(tenantId: string, input: ApplicationCreate): Promise<{ application: Application; apiKey: string }> {
     if (!input || !validId(input.id) || !validName(input.name)) return fail('INVALID_APPLICATION');
     const audience = applicationAudience(input)!;
+    const botId = input.botId ?? 'default';
+    if (typeof botId !== 'string' || !/^[a-z0-9][a-z0-9_-]{1,47}$/.test(botId)) return fail('INVALID_APPLICATION');
     if (input.showInDirectory !== undefined && typeof input.showInDirectory !== 'boolean') return fail('INVALID_APPLICATION');
     const id = input.id, name = input.name.trim(), showInDirectory = input.showInDirectory ?? true;
     const apiKey = newKey(), keyHash = await digest(apiKey);
@@ -116,6 +119,7 @@ export class ApplicationStore {
     const now = new Date().toISOString();
     const application: StoredApplication = {
       id,
+      botId,
       name,
       enabled: true, ...audience,
       showInDirectory,
@@ -135,6 +139,7 @@ export class ApplicationStore {
     const audience = applicationAudience(input, true);
     if (input.showInDirectory !== undefined && typeof input.showInDirectory !== 'boolean') return fail('INVALID_APPLICATION');
     const current = this.current(tenantId, id, input.expectedVersion);
+    if (input.botId !== undefined && input.botId !== current.botId) return fail('APPLICATION_BOT_IMMUTABLE');
     const application = {
       ...current, ...audience,
       name: input.name?.trim() ?? current.name,

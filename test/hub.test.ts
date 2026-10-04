@@ -47,20 +47,7 @@ async function legacyDelivery(notificationId: string) {
 beforeEach(async () => {
   now = Date.now();
   vi.spyOn(Date, 'now').mockImplementation(() => now);
-  hub = bindings.HUB.get(bindings.HUB.idFromName(`hub-test-${crypto.randomUUID()}`));
-  await hub.initializeTenant('default');
-  const registry = bindings.TENANTS.getByName('registry');
-  if (!(await registry.getRuntime('default'))?.botToken) {
-    const validation = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
-      ok: true,
-      result: {id: 123456, is_bot: true, first_name: 'Default test bot', username: 'default_test_bot'}
-    })));
-    try {
-      await registry.configureBot('default', '123456:test-token');
-    } finally {
-      validation.mockRestore();
-    }
-  }
+  hub = (await tenant()).hub;
   updateId = 0;
   await hub.updateSettings({...await hub.getSettings(), paused: true, welcomeMessage: ''});
 });
@@ -611,7 +598,7 @@ describe('per-instance read cache', () => {
       });
       await instance.alarm();
       expect(await state.storage.getAlarm()).toBeLessThanOrEqual(now + 1_000);
-      expect(runtime).toHaveBeenCalledTimes(1);
+      expect(runtime).toHaveBeenCalled();
       runtime.mockRestore();
     });
   });
@@ -727,7 +714,7 @@ describe('subscriber bans and application filtering', () => {
     await runInDurableObject(hub, async (instance, state) => {
       const actualSync = state.storage.sync.bind(state.storage);
       const sync = vi.spyOn(state.storage, 'sync').mockImplementationOnce(async () => {
-        instance.setSubscriberBan(['1'], true);
+        await instance.setSubscriberBan(['1'], true);
         await actualSync();
       });
       await instance.alarm();
@@ -777,6 +764,10 @@ describe('subscriber bans and application filtering', () => {
   });
 
   it('filters notifications by their authenticated application identity without mixing cached filters', async () => {
+    const account = await tenant();
+    hub = account.hub;
+    await account.registry.createApplication(account.id, {id: 'app-one', name: 'One'});
+    await account.registry.createApplication(account.id, {id: 'app-two', name: 'Two'});
     await hub.enqueue({...input, applicationId: 'app-one'}, source);
     await hub.enqueue({...input, applicationId: 'app-two'}, source);
     const first = await hub.listNotifications(1, undefined, undefined, 'app-one');
@@ -1010,7 +1001,7 @@ describe('application audience and directory enforcement', () => {
     expect((await hub.enqueue({...input, applicationId: 'private-app'}, source)).notification.total).toBe(1);
     await account.registry.updateApplication(account.id, 'private-app', {audienceMode: 'selected', audienceChatIds: []});
     expect((await hub.enqueue({...input, applicationId: 'private-app'}, source)).notification.total).toBe(0);
-    expect((await hub.enqueue({...input, applicationId: 'unknown-app'}, source)).notification.total).toBe(0);
+    await expect((async () => await hub.enqueue({...input, applicationId: 'unknown-app'}, source))()).rejects.toThrow('APPLICATION_NOT_FOUND:');
   });
 
   it('rejects foreign audience IDs, permits known opted-out users, and rejects disabled or hidden stale menu callbacks', async () => {

@@ -2,7 +2,7 @@
 
 A lightweight Telegram notification gateway for monitoring, alerts, and CI/CD, running on Cloudflare Workers.
 
-Each **tenant** has its own bot, applications, subscribers, limits, and reports. Each **application** gets an API key for sending notifications.
+Each **tenant** can connect multiple Telegram bots, with separate applications, subscribers, queues, and reports for each bot. Each **application** gets its own API key and belongs to one bot. Tenant quotas are shared across its bots.
 
 - Text, images, severity, timestamps, metadata, and incident links.
 - Persian RTL dashboard with locally hosted Estedad and light, dark, or system theme.
@@ -11,7 +11,8 @@ Each **tenant** has its own bot, applications, subscribers, limits, and reports.
 - Telegram application subscriptions: receive everything by default, or choose specific apps.
 - Persistent delivery queues and reports in SQLite Durable Objects, with caching to reduce database reads.
 - Incident grouping, occurrence counts, Telegram acknowledgment/snooze/resolve actions, and ordered escalation.
-- Tenant defaults and application-specific delivery rules, with a preview of each routing decision.
+- Bot defaults and application-specific delivery rules, with a preview of each routing decision.
+- Searchable bot management with independent enable/disable controls and explicit `BOT_DISABLED` errors.
 - Recipient level/environment preferences, time-zone-aware quiet hours, and periodic digests.
 
 ## Deploy to Cloudflare
@@ -52,7 +53,7 @@ The first deployment uploads the code and admin secret together. For later code 
 | Setting | Where to configure it |
 | --- | --- |
 | Admin login `API_KEY` | Cloudflare Worker Secret; locally, `.dev.vars` |
-| Bot token and webhook | Dashboard → select a tenant → Settings |
+| Bot tokens, webhooks, and enable/disable | Dashboard → select a tenant → Bots |
 | Application API keys | Dashboard → Applications |
 | Tenant quotas | Dashboard → Tenants |
 | IP/country restrictions and delivery settings | Dashboard → Settings |
@@ -61,19 +62,23 @@ The first deployment uploads the code and admin secret together. For later code 
 
 To change the key later, run `npx wrangler secret put API_KEY`, or open **Workers & Pages → your Worker → Settings → Variables and Secrets → Add**, choose **Secret**, enter `API_KEY`, and **Deploy**. Changing the key signs out existing admin sessions.
 
-## Connect your bot
+## Connect your bots
 
 1. Log in to the dashboard and select the default tenant, or create a tenant.
-2. In **Settings**, paste its BotFather token and save it. The relay verifies the bot and generates its webhook secret.
+2. In **Bots**, connect the existing **default** slot, or add a bot with a unique ID, display name, and BotFather token. The relay verifies the token and generates a private webhook secret.
 3. Click **Register webhook** on the deployed HTTPS URL.
-4. In **Applications**, create an application and save the generated API key; it is only shown when created or rotated.
+4. Select that bot in the dashboard header. In **Applications**, create an application and save the generated API key; it is only shown when created or rotated.
 5. Open the bot in Telegram and send `/start`.
 
-Use a separate bot for each tenant. Telegram webhooks need public HTTPS; localhost cannot receive Telegram updates.
+Repeat for as many bots as you need; the relay imposes no bot-count cap. A Telegram bot can be connected only once across the system. Telegram webhooks need public HTTPS; localhost cannot receive Telegram updates.
+
+Disabling a bot rejects new notifications for **all its applications** with HTTP **409 `BOT_DISABLED`**, including Grafana, Alertmanager, and dashboard sends. Its queued messages stay paused and resume after re-enabling, subject to current permissions and retention. Requests already in flight to Telegram may finish. Other bots keep working.
+
+Existing deployments keep their bot, applications, subscribers, and queues under **default** automatically. No new environment variable or Cloudflare binding is required. See [multi-bot setup and API examples](docs/multi-bot.md).
 
 ## Send your first notification
 
-For ready-to-copy requests, select a tenant in the dashboard and open **API Guide**. The page uses that tenant's URL and limits, with examples for sending and tracking notifications. Each tenant also has an API Guide shortcut in **Tenants**.
+For ready-to-copy requests, select a tenant and bot in the dashboard and open **API Guide**. The page uses that tenant's URL and limits, with examples for sending and tracking notifications. The application key determines which bot receives the request; producers do not supply a bot token or routing parameter.
 
 Replace the URL, tenant ID, and application key below. Use the application's key, **not** the admin login key.
 
@@ -114,7 +119,7 @@ The renderer uses the [Telegram Bot API's Rich Messages and buttons](https://cor
 
 ### Incident response and delivery rules
 
-Open **قوانین ارسال** to enable grouping, configure responders and escalation, and define ordered delivery rules for the selected tenant or application. **مرکز رخدادها** shows active incidents and their action history. Recipient preferences control levels, environments, quiet hours, and digests.
+Open **قوانین ارسال** to enable grouping, configure responders and escalation, and define ordered delivery rules for the selected bot or application. **مرکز رخدادها** shows that bot's active incidents and their action history. Recipient preferences control levels, environments, quiet hours, and digests.
 
 Grouping, escalation, quiet hours, and digests are opt-in. To correlate an alert with its resolution, send the same `fingerprint` with `incidentStatus: "firing"` and later `incidentStatus: "resolved"`. Keep `Idempotency-Key` for retrying one unchanged request.
 
@@ -131,15 +136,15 @@ See the [incident and delivery-rules guide](docs/automation.md) for setup, paylo
 | `/preferences` | Configure your delivery preferences |
 | `/timezone Asia/Tehran` | Set the time zone for your quiet hours |
 
-New and existing subscribers initially have access to all current and future applications. In **Subscribers**, admins can edit a display-name override, private notes, and the applications each subscriber may receive. These changes preserve the Telegram name, username, and chat ID. Clearing the display name restores the Telegram name.
+New and existing subscribers initially have access to all current and future applications of the bot they started. Starting one bot never subscribes someone to another bot. In **Subscribers**, admins can edit a display-name override, private notes, and the applications each subscriber may receive. These changes preserve the Telegram name, username, and chat ID. Clearing the display name restores the Telegram name.
 
 Admin permissions and the subscriber's Telegram preferences are independent: delivery requires both to allow the application. `/all` cannot bypass admin restrictions. With admin access set to **Selected applications**, an empty selection permits no applications. With access set to **All applications**, future applications are permitted too.
 
-Each application also has its own audience in **Applications**: all current/future subscribers, or up to 1,000 selected existing subscribers in that tenant. An empty selected audience receives nothing. Delivery requires the application audience, subscriber admin permissions, and Telegram preferences all to permit it. **Show in bot directory** controls visibility in `/apps`; hiding an application still allows otherwise-authorized notifications.
+Each application also has its own audience in **Applications**: all current/future subscribers of its bot, or up to 1,000 selected existing subscribers of that bot. An empty selected audience receives nothing. Delivery requires the application audience, subscriber admin permissions, and Telegram preferences all to permit it. **Show in bot directory** controls visibility in `/apps`; hiding an application still allows otherwise-authorized notifications.
 
 Admins can ban users individually or in bulk from **Subscribers**. Profile and application-access edits do not change subscription or ban status. Banned users cannot resubscribe; after unbanning, they must send `/start` again. Bans and access/preference changes can skip pending deliveries; messages already sent cannot be recalled.
 
-For admin integrations, read and patch `/api/admin/tenants/{tenantId}/subscribers/{chatId}` using an admin session; `/api/admin/subscribers/{chatId}` addresses the default tenant. PATCH requires the latest `version` as `expectedVersion`, and the exact deployment `Origin`. Send `accessMode` and `allowedApplicationIds` together: `all` requires an empty array; `selected` restricts delivery to the supplied IDs. `displayName` is limited to 80 characters and `notes` to 1,000. Both subscriber-list routes accept an optional `search` query of up to 100 characters. See the [OpenAPI reference](docs/openapi.yaml) for request and response schemas.
+For admin integrations, read and patch `/api/admin/tenants/{tenantId}/subscribers/{chatId}?botId={botId}` using an admin session; `/api/admin/subscribers/{chatId}?botId={botId}` addresses the default tenant. Omitting `botId` selects the existing `default` bot. PATCH requires the latest `version` as `expectedVersion`, and the exact deployment `Origin`. Send `accessMode` and `allowedApplicationIds` together: `all` requires an empty array; `selected` restricts delivery to the supplied IDs. `displayName` is limited to 80 characters and `notes` to 1,000. Both subscriber-list routes accept an optional `search` query of up to 100 characters. See the [OpenAPI reference](docs/openapi.yaml) for request and response schemas.
 
 ## Local development
 

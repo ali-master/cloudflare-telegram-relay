@@ -11,6 +11,8 @@ const state = {
   editApplicationTenantId: null,
   tenants: [],
   tenantId: null,
+  botId: 'default',
+  bot: null,
   epoch: 0,
   activeWrites: 0,
   usage: null,
@@ -39,6 +41,7 @@ const titles = {
   settings: 'تنظیمات و امنیت',
   api: 'راهنمای اتصال',
   tenants: 'مدیریت فضاها',
+  bots: 'بات‌های تلگرام',
   applications: 'اپلیکیشن‌ها',
   incidents: 'مرکز رخدادها',
   automation: 'قوانین ارسال',
@@ -208,6 +211,10 @@ function staleResponse() {
   return error;
 }
 
+function selectedBot() { return state.bot; }
+
+function botWebhookUrl() { return `${location.origin}/telegram/${encodeURIComponent(state.tenantId)}/bots/${encodeURIComponent(state.botId)}/webhook`; }
+
 function selectedTenant() {
   return state.tenants.find(tenant => tenant.id === state.tenantId) || null;
 }
@@ -285,7 +292,7 @@ function clearTenantData() {
   text('#metric-subscribers-foot', 'در حال دریافت اطلاعات این فضا');
   text('#subscribers-count', 'در حال دریافت اطلاعات این فضا');
   text('#connection-title', 'در حال بررسی اتصال بات این فضا…');
-  text('#connection-detail', 'تنظیمات و مشترکان هر فضای اعلان مستقل هستند.');
+  text('#connection-detail', 'تنظیمات و مشترکان هر بات مستقل هستند.');
   $('#connection-banner').classList.remove('warning');
   text('#webhook-description', 'در حال دریافت وضعیت وب‌هوک این فضا…');
   text('#bot-checked-at', '');
@@ -307,7 +314,7 @@ async function switchTenant(id) {
     toast('تا پایان ذخیره یا ارسال، تغییر فضا امکان‌پذیر نیست.', true);
     return;
   }
-  if (id !== state.tenantId && !window.RelayAutomation.canLeave(() => handleLoad(() => switchTenant(id)))) {
+  if (id !== state.tenantId && (!window.RelayBots.canLeave(() => handleLoad(() => switchTenant(id))) || !window.RelayAutomation.canLeave(() => handleLoad(() => switchTenant(id))))) {
     $('#tenant-selector').value = state.tenantId;
     syncSelects();
     return;
@@ -315,8 +322,28 @@ async function switchTenant(id) {
   if (!state.tenants.some(tenant => tenant.id === id)) throw new Error('فضای انتخاب‌شده وجود ندارد.');
   state.epoch++;
   state.tenantId = id;
+  state.botId = 'default';
+  state.bot = null;
   clearTenantData();
+  window.RelayBots.clear();
   renderTenantSelector();
+  const result = await api(tenantPath('bots/default'));
+  state.bot = result.bot;
+  window.RelayBots.renderScope();
+  await refresh({initial: true});
+}
+
+async function switchBot(bot) {
+  if (!bot || !state.authenticated) return;
+  if (state.activeWrites) { toast('تا پایان ذخیره یا ارسال، تغییر بات امکان‌پذیر نیست.', true); return; }
+  if (bot.id === state.botId) { state.bot = bot; window.RelayBots.renderScope(); return; }
+  if (!window.RelayBots.canLeave(() => handleLoad(() => switchBot(bot))) || !window.RelayAutomation.canLeave(() => handleLoad(() => switchBot(bot)))) return;
+  state.epoch++;
+  state.botId = bot.id;
+  state.bot = bot;
+  clearTenantData();
+  window.RelayBots.renderScope();
+  updateApiExample();
   await refresh({initial: true});
 }
 
@@ -341,7 +368,7 @@ function renderTenants() {
     });
     return;
   }
-  const {element, tbody} = table(['فضا / شناسه', 'وضعیت', 'بات', 'سهمیهٔ روزانه', '']);
+  const {element, tbody} = table(['فضا / شناسه', 'وضعیت', 'بات‌های تلگرام', 'سهمیهٔ روزانه', '']);
   for (const tenant of state.tenants) {
     const row = node('tr');
     const cell = node('td');
@@ -352,8 +379,14 @@ function renderTenants() {
     cell.append(content);
     const status = node('td');
     status.append(badge(tenant.enabled ? 'active' : 'inactive'));
-    const bot = node('td', '', tenant.botUsername ? `@${tenant.botUsername}` : tenant.botConfigured ? 'توکن تعریف شده' : 'متصل نشده');
-    bot.dir = 'auto';
+    const bot = node('td');
+    const manageBots = node('button', 'text-button', 'مدیریت بات‌ها');
+    manageBots.type = 'button';
+    manageBots.addEventListener('click', () => handleLoad(async () => {
+      if (state.tenantId !== tenant.id) await switchTenant(tenant.id);
+      if (state.tenantId === tenant.id) changeTab('bots');
+    }));
+    bot.append(manageBots);
     const actions = node('td');
     const buttons = node('div', 'tenant-row-actions');
     const select = node('button', 'button secondary small-button', tenant.id === state.tenantId ? 'انتخاب‌شده' : 'انتخاب');
@@ -442,7 +475,7 @@ async function loadApplications() {
 
 function renderApplications() {
   window.RelayAutomation.applicationsChanged(state.applications);
-  text('#applications-count', `${count(state.applications.length)} اپلیکیشن در فضای ${selectedTenant()?.name || 'انتخاب‌شده'}`);
+  text('#applications-count', `${count(state.applications.length)} اپلیکیشن · بات ${selectedBot()?.name || state.botId}`);
   const composerValue = $('#compose-app').value, filterValue = $('#application-filter').value;
   const active = state.applications.filter(application => application.enabled);
   const placeholder = node('option', '', active.length ? 'اپلیکیشن را انتخاب کنید' : 'ابتدا یک اپلیکیشن فعال بسازید');
@@ -482,6 +515,7 @@ function renderApplications() {
     cell.append(wrap);
     const status = node('td');
     status.append(badge(application.enabled ? 'active' : 'inactive'));
+    if (application.enabled && selectedBot()?.enabled === false) status.append(node('small', 'bot-app-blocked', 'ارسال متوقف · بات غیرفعال'));
     const audience = node('td', 'subscriber-access-cell');
     audience.append(node('span', `badge ${application.audienceMode === 'selected' && !application.audienceChatIds?.length ? 'warning' : 'neutral'}`, application.audienceMode === 'selected' ? application.audienceChatIds?.length ? `${count(application.audienceChatIds.length)} مخاطب انتخاب‌شده` : 'بدون مخاطب مجاز' : 'همهٔ مشترکان فعلی و آینده'), node('small', '', application.showInDirectory === false ? 'در فهرست بات پنهان' : 'در فهرست بات نمایش داده می‌شود'));
     const key = node('td');
@@ -519,6 +553,7 @@ function openApplicationEditor(id = null) {
   showError('#application-form-error', '');
   text('#application-dialog-heading', application ? 'مدیریت اپلیکیشن' : 'ساخت اپلیکیشن');
   text('#application-tenant-name', `فضای اعلان: ${selectedTenant()?.name || state.tenantId}`);
+  text('#application-bot-binding', `بات مقصد: ${selectedBot()?.name || state.botId} · پس از ساخت، بات اپلیکیشن تغییر نمی‌کند.${selectedBot()?.enabled === false ? ' این بات غیرفعال است؛ اپلیکیشن فعلاً امکان ارسال نخواهد داشت.' : ''}`);
   $('#application-id').value = application?.id || '';
   $('#application-id').readOnly = Boolean(application);
   $('#application-name').value = application?.name || '';
@@ -765,12 +800,20 @@ async function setSubscriberBan(chatIds, banned) {
 async function api(path, options = {}) {
   const scoped = /^\/api\/admin\/(overview|settings|status|context|subscribers|notifications|webhook|usage|applications)(?=\/|\?|$)/.test(path);
   if (scoped) path = path.replace('/api/admin/', `${tenantPath('')}/`);
+  const botScoped = /^\/api\/admin\/tenants\/[^/]+\/(overview|settings|status|context|subscribers|notifications|webhook|usage|applications|automation|incidents)(?=\/|\?|$)/.test(path);
+  if (botScoped) {
+    const url = new URL(path, location.origin);
+    if (!url.searchParams.has('botId')) url.searchParams.set('botId', state.botId);
+    path = url.pathname + url.search;
+  }
   const epoch = state.epoch;
   const guarded = path.startsWith('/api/admin/') && !['/api/admin/login', '/api/admin/logout', '/api/admin/session'].includes(path);
   const write = options.method && !['GET', 'HEAD'].includes(options.method.toUpperCase()) && !['/api/admin/login', '/api/admin/logout'].includes(path);
   if (write) {
     state.activeWrites++;
     $('#tenant-selector').disabled = true;
+    $('#bot-scope-button').disabled = true;
+    syncSelects();
   }
   try {
     let response;
@@ -806,6 +849,8 @@ async function api(path, options = {}) {
     if (write) {
       state.activeWrites = Math.max(0, state.activeWrites - 1);
       $('#tenant-selector').disabled = state.activeWrites > 0 || !state.tenants.length;
+      window.RelayBots.renderScope();
+      syncSelects();
     }
   }
 }
@@ -1007,13 +1052,17 @@ function renderOverview(data) {
 function renderStatus(data) {
   state.status = data;
   const connected = Boolean(data.bot);
-  const webhookReady = Boolean(data.webhook?.url && data.webhook.url === `${location.origin}/telegram/${encodeURIComponent(state.tenantId)}/webhook`);
+  const legacyWebhook = state.botId === 'default' && (data.webhook?.url === `${location.origin}/telegram/${encodeURIComponent(state.tenantId)}/webhook` || state.tenantId === 'default' && data.webhook?.url === `${location.origin}/telegram/webhook`);
+  const webhookReady = Boolean(data.webhook?.url && (data.webhook.url === botWebhookUrl() || legacyWebhook));
   const paused = Boolean(state.settings?.paused);
-  const ready = connected && webhookReady && !data.telegramError && !paused && Boolean(selectedTenant()?.enabled);
+  const ready = connected && webhookReady && !data.telegramError && !paused && Boolean(selectedTenant()?.enabled) && Boolean(selectedBot()?.enabled);
   $('#connection-banner').classList.toggle('warning', !ready);
   if (!selectedTenant()?.enabled) {
     text('#connection-title', 'این فضای اعلان غیرفعال است');
     text('#connection-detail', 'دریافت و ارسال اعلان‌های این فضا متوقف است. برای فعال‌سازی به مدیریت فضاها بروید.');
+  } else if (selectedBot()?.enabled === false) {
+    text('#connection-title', 'این بات غیرفعال است');
+    text('#connection-detail', 'ارسال اپلیکیشن‌های این بات متوقف است. برای فعال‌سازی به «بات‌های تلگرام» بروید.');
   } else if (paused) {
     text('#connection-title', 'ارسال اعلان‌ها موقتاً متوقف است');
     text('#connection-detail', 'برای ادامهٔ تحویل اعلان‌های صف‌شده، ارسال را از تنظیمات فعال کنید.');
@@ -1022,7 +1071,7 @@ function renderStatus(data) {
     text('#connection-detail', 'اتصال بات و وب‌هوک برقرار است. اعلان‌های جدید برای مشترکان فعال در صف قرار می‌گیرند.');
   } else if (!data.configured.bot) {
     text('#connection-title', 'بات شما منتظر اتصال است');
-    text('#connection-detail', 'توکن بات این فضا را در تنظیمات ذخیره کنید، سپس وب‌هوک را ثبت کنید.');
+    text('#connection-detail', 'توکن بات انتخاب‌شده را ذخیره کنید، سپس وب‌هوک همان بات را ثبت کنید.');
   } else if (!connected || data.telegramError) {
     text('#connection-title', 'اتصال به تلگرام نیاز به بررسی دارد');
     text('#connection-detail', data.telegramError || 'پاسخ معتبر از تلگرام دریافت نشد. جزئیات را در تنظیمات ببینید.');
@@ -1495,6 +1544,7 @@ async function refresh({initial = false, manual = false} = {}) {
   $('#refresh').disabled = true;
   try {
     const tasks = [];
+    if (!initial) tasks.push(api(tenantPath(`bots/${encodeURIComponent(state.botId)}`)).then(result => { state.bot = result.bot; window.RelayBots.renderScope(); updateApiExample(); renderApplications(); if (state.status) renderStatus(state.status); }));
     if (!initial) tasks.push(api(tenantPath('')).then(result => {
       if (state.authenticated && selectedTenant()?.version !== result.tenant.version) updateTenant(result.tenant);
     }));
@@ -1521,6 +1571,7 @@ async function refresh({initial = false, manual = false} = {}) {
       if (state.authenticated) renderUsage(result);
     }));
     if (manual && state.tab === 'tenants') tasks.push(loadTenants());
+    if (state.tab === 'bots') tasks.push(window.RelayBots.load());
     if (state.tab === 'notifications') tasks.push(loadNotifications(initial || manual));
     if (state.tab === 'subscribers') tasks.push(loadSubscribers(initial || manual));
     if (['incidents', 'automation'].includes(state.tab)) tasks.push(initial ? window.RelayAutomation.activate(state.tab) : window.RelayAutomation.refresh({manual}));
@@ -1647,7 +1698,7 @@ async function loadLoginAudit(reset = false) {
 
 function changeTab(tab, focus = false) {
   if (!Object.hasOwn(titles, tab)) tab = 'overview';
-  if (tab !== state.tab && !window.RelayAutomation.canLeave(() => changeTab(tab, focus))) return;
+  if (tab !== state.tab && (!window.RelayBots.canLeave(() => changeTab(tab, focus)) || !window.RelayAutomation.canLeave(() => changeTab(tab, focus)))) return;
   state.tab = tab;
   $$('.nav-item[role=tab]').forEach(button => {
     const active = button.dataset.tab === tab;
@@ -1661,6 +1712,8 @@ function changeTab(tab, focus = false) {
   text('#breadcrumb-current', titles[tab]);
   $('.topbar').classList.toggle('audit-context', tab === 'login-audit');
   $('.tenant-switcher').hidden = tab === 'login-audit';
+  $('#bot-scope-button').hidden = ['login-audit', 'tenants'].includes(tab);
+  window.RelayBots.renderScope();
   history.replaceState(null, '', `#${tab}`);
   if (focus) $(`#tab-${tab}`).focus();
   if (state.authenticated && tab === 'login-audit') {
@@ -1669,6 +1722,7 @@ function changeTab(tab, focus = false) {
   }
   if (!state.authenticated || !state.tenantId) return;
   if (tab === 'tenants') renderTenants();
+  if (tab === 'bots') handleLoad(() => window.RelayBots.load());
   if (tab === 'applications') renderApplications();
   if (tab === 'api') updateApiExample();
   if (tab === 'notifications') handleLoad(() => loadNotifications());
@@ -1689,7 +1743,10 @@ function showAuth() {
   showError('#login-audit-error', '');
   state.epoch++;
   state.tenantId = null;
+  state.botId = 'default';
+  state.bot = null;
   state.tenants = [];
+  window.RelayBots.clear();
   clearTenantData();
   renderTenantSelector();
   state.authenticated = false;
@@ -1852,8 +1909,8 @@ $('#tenant-form').addEventListener('submit', async event => {
     $('#tenant-dialog').close();
     if (!tenantId) {
       await switchTenant(result.tenant.id);
-      changeTab('settings');
-      toast('فضا ساخته شد؛ توکن بات را ذخیره کنید، سپس اپلیکیشن بسازید.');
+      changeTab('bots');
+      toast('فضا ساخته شد؛ بات‌های آن را اضافه کنید، سپس اپلیکیشن بسازید.');
     } else {
       if (tenantId === state.tenantId) await refresh({manual: true});
       toast('تنظیمات فضا ذخیره شد.');
@@ -1867,8 +1924,8 @@ $('#tenant-form').addEventListener('submit', async event => {
 });
 $('#bot-token-form').addEventListener('submit', async event => {
   event.preventDefault();
-  const tenant = selectedTenant();
-  if (!tenant) return;
+  const bot = selectedBot();
+  if (!bot) return;
   const botToken = $('#bot-token').value.trim();
   $('#bot-token').value = '';
   const button = $('#save-bot-token');
@@ -1877,12 +1934,12 @@ $('#bot-token-form').addEventListener('submit', async event => {
   showError('#bot-token-error', '');
   text('#bot-token-feedback', 'در حال بررسی هویت بات با تلگرام و ذخیرهٔ امن توکن…');
   try {
-    const result = await api(tenantPath('bot', tenant.id), {
-      method: 'PUT',
-      body: JSON.stringify({botToken, expectedVersion: tenant.version})
+    const result = await api(tenantPath(`bots/${encodeURIComponent(bot.id)}`), {
+      method: 'PATCH',
+      body: JSON.stringify({botToken, expectedVersion: bot.version})
     });
-    updateTenant(result.tenant);
-    text('#bot-token-feedback', 'توکن بررسی و ذخیره شد. اکنون وب‌هوک این فضا را ثبت کنید.');
+    await window.RelayBots.afterChange(result.bot);
+    text('#bot-token-feedback', 'توکن بررسی و ذخیره شد. اکنون وب‌هوک این بات را ثبت کنید.');
     await refresh({manual: true});
     toast('توکن بات ذخیره شد.');
   } catch (error) {
@@ -1912,7 +1969,7 @@ $('#application-form').addEventListener('submit', async event => {
     name: String(form.get('name')).trim(), ...applicationAudiencePayload(), ...(appId ? {
       enabled: form.has('enabled'),
       expectedVersion: state.editApplicationVersion
-    } : {id: String(form.get('id')).trim()})
+    } : {id: String(form.get('id')).trim(), botId: state.botId})
   };
   if (input.audienceChatIds.length > 1000) {
     showError('#application-form-error', 'حداکثر ۱۰۰۰ مخاطب را انتخاب کنید.');
@@ -2129,7 +2186,7 @@ $$('[data-go-history]').forEach(button => button.addEventListener('click', () =>
 $$('[data-compose]').forEach(button => button.addEventListener('click', openComposer));
 
 function requestDialogClose(dialog) {
-  if (!window.RelayAutomation.canClose(dialog)) return;
+  if (!window.RelayBots.canClose(dialog) || !window.RelayAutomation.canClose(dialog)) return;
   if (dialog.id === 'subscriber-profile-dialog' && subscriberEditor.saving || dialog.id === 'application-dialog' && applicationAudience.saving) return;
   dialog.close();
 }
@@ -2212,7 +2269,7 @@ $('#register-webhook').addEventListener('click', async () => {
   const button = $('#register-webhook');
   busy(button, true);
   try {
-    await api('/api/admin/webhook', {method: 'POST', body: '{}'});
+    await api(tenantPath(`bots/${encodeURIComponent(state.botId)}/webhook`), {method: 'POST', body: JSON.stringify({url: botWebhookUrl()})});
     renderStatus(await api('/api/admin/status'));
     toast('وب‌هوک بات ثبت شد.');
   } catch (error) {
@@ -2282,9 +2339,11 @@ function updateApiExample() {
   const status = $('#api-tenant-status');
   status.className = `badge ${tenant ? tenant.enabled ? 'success' : 'warning' : 'neutral'}`;
   status.textContent = tenant ? tenant.enabled ? 'فعال' : 'غیرفعال' : '—';
-  text('#api-tenant-description', tenant ? tenant.botUsername ? `اعلان‌های این فضا به بات @${tenant.botUsername} و مخاطبان واجد شرایط آن می‌رسند.` : tenant.botConfigured ? 'توکن بات این فضا ذخیره شده است؛ وضعیت اتصال و وب‌هوک را در تنظیمات بررسی کنید.' : 'ابتدا بات این فضا را از بخش تنظیمات متصل کنید.' : 'هر فضا بات، اپلیکیشن‌ها و مخاطبان خودش را دارد.');
+  text('#api-tenant-description', 'هر فضا چندین بات دارد؛ هر اپلیکیشن با کلید مستقل خودش به یک بات مشخص متصل است.');
+  const bot = selectedBot();
+  text('#api-bot-context', bot ? `بات مقصد اپلیکیشن‌های نمایش‌داده‌شده: ${bot.name}${bot.username ? ` · @${bot.username}` : ''} · ${bot.enabled ? 'فعال' : 'غیرفعال'}` : 'یک بات انتخاب کنید.');
   const active = state.applications.filter(application => application.enabled && application.keyConfigured);
-  text('#api-application-context', !tenant ? 'برای دریافت راهنمای اختصاصی، یک Tenant انتخاب کنید.' : !tenant.enabled ? 'این Tenant غیرفعال است و درخواست ارسال آن پذیرفته نمی‌شود. از مدیریت فضاها آن را فعال کنید.' : !applicationsLoaded ? 'در حال دریافت اپلیکیشن‌های همین فضا…' : active.length ? `${count(active.length)} اپلیکیشن فعال با کلید ارسال در این فضا دارید. کلید اپلیکیشن فرستنده را در نمونه جایگزین کنید.` : 'این فضا هنوز اپلیکیشن فعال با کلید ارسال ندارد. از «اپلیکیشن‌ها و کلیدها» یک اپلیکیشن بسازید یا کلید آن را دریافت کنید.');
+  text('#api-application-context', !tenant ? 'برای دریافت راهنمای اختصاصی، یک Tenant انتخاب کنید.' : !tenant.enabled ? 'این Tenant غیرفعال است و درخواست ارسال آن پذیرفته نمی‌شود. از مدیریت فضاها آن را فعال کنید.' : bot?.enabled === false ? 'بات انتخاب‌شده غیرفعال است. درخواست تمام اپلیکیشن‌های آن با HTTP 409 و کد BOT_DISABLED رد می‌شود.' : !applicationsLoaded ? 'در حال دریافت اپلیکیشن‌های همین بات…' : active.length ? `${count(active.length)} اپلیکیشن فعال با کلید ارسال برای این بات دارید. کلید اپلیکیشن فرستنده را در نمونه جایگزین کنید.` : 'این فضا هنوز اپلیکیشن فعال با کلید ارسال ندارد. از «اپلیکیشن‌ها و کلیدها» یک اپلیکیشن بسازید یا کلید آن را دریافت کنید.');
   $('#api-tenant-limits').replaceChildren(...(tenant ? [
     ['درخواست در دقیقه', tenant.limits.requestsPerMinute],
     ['اعلان در روز · UTC', tenant.limits.notificationsPerDay],
@@ -2333,6 +2392,7 @@ function updateApiExample() {
   text('#api-status-example', statusExample);
 }
 
+window.RelayBots.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects, selectedTenant, switchBot, changeTab, updateApiExample, renderStatus, renderApplications, renderSettings});
 window.RelayAutomation.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects});
 updateApiExample();
 for (const [selector, getExample] of [['#copy-example', () => curlExample], ['#copy-status-example', () => statusExample]]) {

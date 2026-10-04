@@ -71,6 +71,9 @@ export class NotificationHub extends DurableObject<Env> {
   private automation!: HubAutomation;
   private settings: Settings = structuredClone(DEFAULT_SETTINGS);
   private tenantId: string | null = null;
+  private selectedBotId = 'default';
+  private quotaTail: Promise<void> = Promise.resolve();
+  private quotaPendingCeiling: number | null = null;
   private lastCleanupAt = -Infinity;
   private wakeEpoch = 0;
   private readonly readCache = new Map<string, { expiresAt: number; value: unknown }>();
@@ -259,8 +262,10 @@ export class NotificationHub extends DurableObject<Env> {
           );
       `);
       this.sql.exec('INSERT OR IGNORE INTO tenant_identity (id, tenant_id) VALUES (1, ?)', legacyDatabase ? 'default' : null);
-      const storedTenant = this.rows('SELECT tenant_id FROM tenant_identity WHERE id = 1')[0].tenant_id;
-      this.tenantId = typeof storedTenant === 'string' ? storedTenant : null;
+      if (!this.rows('PRAGMA table_info(tenant_identity)').some(column => column.name === 'bot_id')) this.sql.exec("ALTER TABLE tenant_identity ADD COLUMN bot_id TEXT NOT NULL DEFAULT 'default'");
+      const storedIdentity = this.rows('SELECT tenant_id, bot_id FROM tenant_identity WHERE id = 1')[0];
+      this.tenantId = typeof storedIdentity.tenant_id === 'string' ? storedIdentity.tenant_id : null;
+      this.selectedBotId = String(storedIdentity.bot_id);
       // Upgrade existing local/deployed databases without discarding their queued work.
       if (!this.rows('PRAGMA table_info(notifications)').some((column) => column.name === 'purging')) {
         this.sql.exec('ALTER TABLE notifications ADD COLUMN purging INTEGER NOT NULL DEFAULT 0');
@@ -360,20 +365,61 @@ export class NotificationHub extends DurableObject<Env> {
     this.readCache.clear();
   }
 
-  async initializeTenant(id: string, name?: string): Promise<void> {
+  private nextQuotaRevision(): number {
+    this.sql.exec("INSERT INTO queue_state (key,value) VALUES ('quota_revision',1) ON CONFLICT(key) DO UPDATE SET value=value+1");
+    return Number(this.rows("SELECT value FROM queue_state WHERE key='quota_revision'")[0].value);
+  }
+
+  private pendingIncidentExpansion(): number {
+    return this.count("SELECT COUNT(*) AS count FROM deliveries WHERE incident_id IS NOT NULL AND status NOT IN ('pending','sending') AND NOT (status='unknown' AND telegram_message_id IS NULL)");
+  }
+
+  /** Reserve tenant-wide capacity before growing this bot's durable state. */
+  private async withQuota<T>(requested: (runtime: TenantRuntime) => {notifications: number; subscribers: number; pending: number}, action: () => Promise<T>, requireEnabled = false): Promise<T> {
+    const previous = this.quotaTail;
+    let unlock!: () => void;
+    this.quotaTail = new Promise<void>(resolve => { unlock = resolve; });
+    await previous;
+    let reserved = false;
+    try {
+      this.cleanup();
+      const runtime = await this.runtime();
+      if (requireEnabled && !runtime.enabled) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: This tenant is disabled.');
+      if (requireEnabled && runtime.botEnabled === false) throw new AppError(409, 'BOT_DISABLED', 'BOT_DISABLED: This bot is disabled. Enable it before sending notifications.');
+      const reservation = await this.env.TENANTS.getByName('registry').reserveQuota(this.tenantId!, this.selectedBotId, this.nextQuotaRevision(), this.readUsage(), requested(runtime));
+      this.quotaPendingCeiling = reservation.maxPendingDeliveries;
+      this.maxPendingDeliveries = reservation.maxPendingDeliveries;
+      reserved = true;
+      return await action();
+    } finally {
+      this.quotaPendingCeiling = null;
+      if (reserved) {
+        // Reports only release held capacity. A failed report leaves conservative
+        // reservations in the registry until this hub reconciles on its next call.
+        try { await this.env.TENANTS.getByName('registry').reportQuotaUsage(this.tenantId!, this.selectedBotId, this.nextQuotaRevision(), this.readUsage()); }
+        catch { /* Preserve the already committed operation's result. */ }
+      }
+      unlock();
+    }
+  }
+
+  async initializeTenant(id: string, name?: string, botId = 'default'): Promise<void> {
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) throw new AppError(400, 'TENANT_DISABLED', 'TENANT_DISABLED: Invalid tenant identity.');
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(botId)) throw new AppError(400, 'BOT_NOT_FOUND', 'BOT_NOT_FOUND: Invalid bot identity.');
     if (this.tenantId !== null) {
+      if (this.selectedBotId !== botId) throw new AppError(409, 'BOT_NOT_FOUND', 'BOT_NOT_FOUND: This hub belongs to a different bot.');
       if (this.tenantId !== id) throw new AppError(409, 'TENANT_DISABLED', 'TENANT_DISABLED: This hub already belongs to a different tenant.');
       return;
     }
     this.ctx.storage.transactionSync(() => {
-      this.sql.exec('UPDATE tenant_identity SET tenant_id = ? WHERE id = 1', id);
+      this.sql.exec('UPDATE tenant_identity SET tenant_id = ?, bot_id = ? WHERE id = 1', id, botId);
       if (name) {
         this.settings = {...this.settings, projectName: name.slice(0, 80)};
         this.sql.exec('UPDATE settings SET body = ? WHERE id = 1', JSON.stringify(this.settings));
       }
     });
     this.tenantId = id;
+    this.selectedBotId = botId;
     this.invalidate();
   }
 
@@ -386,10 +432,12 @@ export class NotificationHub extends DurableObject<Env> {
   private async runtime(): Promise<TenantRuntime> {
     if (!this.tenantId || !this.env.TENANTS) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: Tenant is unavailable.');
     const knownRevision = this.applicationRevision;
-    const runtime = await this.env.TENANTS.getByName('registry').getRuntime(this.tenantId, knownRevision);
+    const runtime = await this.env.TENANTS.getByName('registry').getRuntime(this.tenantId, knownRevision, this.selectedBotId);
     if (!runtime || runtime.id !== this.tenantId) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: Tenant is unavailable.');
+    if (runtime.selectedBotId !== undefined && runtime.selectedBotId !== this.selectedBotId) throw new AppError(403, 'BOT_NOT_FOUND', 'BOT_NOT_FOUND: Bot scope is unavailable.');
     if (runtime.applications) this.refreshApplicationAccess(runtime.applications);
     else if (runtime.applicationRevision !== knownRevision) throw new AppError(503, 'TENANT_DISABLED', 'TENANT_DISABLED: Application policy snapshot is unavailable.');
+    runtime.limits = {...runtime.limits, maxPendingDeliveries: Math.min(runtime.limits.maxPendingDeliveries, this.quotaPendingCeiling ?? Infinity)};
     this.maxPendingDeliveries = runtime.limits.maxPendingDeliveries;
     return runtime;
   }
@@ -408,6 +456,7 @@ export class NotificationHub extends DurableObject<Env> {
     const changed: Application[] = [];
     this.ctx.storage.transactionSync(() => {
       for (const app of applications) {
+        if ((app.botId ?? 'default') !== this.selectedBotId) continue;
         const version = this.applicationVersions.get(app.id);
         if (typeof version === 'number' && version >= app.version) continue;
         this.sql.exec(`INSERT INTO application_access (application_id, version, enabled, audience_mode,
@@ -452,20 +501,25 @@ export class NotificationHub extends DurableObject<Env> {
 
   getUsage(): TenantUsage {
     const day = new Date(Date.now()).toISOString().slice(0, 10);
-    return this.cached(`usage:${day}`, () => ({
+    return this.cached(`usage:${day}`, () => this.readUsage());
+  }
+
+  private readUsage(): TenantUsage {
+    const day = new Date(Date.now()).toISOString().slice(0, 10);
+    return {
       day,
       notificationsToday: Number(this.rows('SELECT notifications FROM daily_usage WHERE day = ?', day)[0]?.notifications ?? 0),
       activeSubscribers: this.count('SELECT COUNT(*) AS count FROM subscribers WHERE active = 1 AND banned = 0'),
       // Welcome messages share the same durable queue and therefore also consume capacity.
       pendingDeliveries: this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending', 'sending')"),
-    }));
+    };
   }
 
   getSettings(): Settings {
     return structuredClone(this.settings);
   }
 
-  setSubscriberBan(chatIds: string[], banned: boolean, reason?: string): { updated: number } {
+  async setSubscriberBan(chatIds: string[], banned: boolean, reason?: string): Promise<{ updated: number }> {
     if (!Array.isArray(chatIds) || chatIds.length < 1 || chatIds.length > 100 || chatIds.some((id) => typeof id !== 'string' || !/^-?\d{1,20}$/.test(id)) || typeof banned !== 'boolean') {
       throw new AppError(400, 'INVALID_BAN', 'Select between 1 and 100 valid subscriber IDs.');
     }
@@ -482,6 +536,9 @@ export class NotificationHub extends DurableObject<Env> {
       return count;
     });
     this.invalidate();
+    // Revocation is immediate; the quota reconciliation only releases capacity.
+    try { await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined); }
+    catch { await this.ensureAlarm(Date.now()+100); }
     return {updated};
   }
 
@@ -521,12 +578,21 @@ export class NotificationHub extends DurableObject<Env> {
     this.rateCounters.set(key, counter);
   }
 
-  async enqueue(input: NotificationInput, source: SourceContext, idempotencyKey?: string, requestFingerprint?: string): Promise<{
+  async enqueue(input: NotificationInput, source: SourceContext, idempotencyKey?: string, requestFingerprint?: string): Promise<{notification: NotificationRecord; duplicate: boolean}> {
+    return this.withQuota(() => {
+      const duplicate = idempotencyKey && this.rows('SELECT id FROM notifications WHERE idempotency_key = ? AND purging = 0', idempotencyKey).length > 0;
+      return {notifications: duplicate ? 0 : 1, subscribers: 0, pending: duplicate ? 0 : this.count('SELECT COUNT(*) AS count FROM subscribers WHERE active = 1 AND banned = 0') + this.pendingIncidentExpansion()};
+    }, () => this.enqueueReserved(input, source, idempotencyKey, requestFingerprint), true);
+  }
+
+  private async enqueueReserved(input: NotificationInput, source: SourceContext, idempotencyKey?: string, requestFingerprint?: string): Promise<{
     notification: NotificationRecord;
     duplicate: boolean
   }> {
     const runtime = await this.runtime();
     if (!runtime.enabled) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: This tenant is disabled.');
+    if (runtime.botEnabled === false) throw new AppError(409, 'BOT_DISABLED', 'BOT_DISABLED: This bot is disabled. Enable it before sending notifications.');
+    if (input.applicationId) this.assertAutomationApplication(input.applicationId);
     if (!runtime.botToken) throw new AppError(503, 'BOT_NOT_CONFIGURED', 'BOT_NOT_CONFIGURED: This tenant has no bot credentials.');
     const fingerprint = requestFingerprint ?? stableJSON(input);
     this.cleanup();
@@ -803,6 +869,10 @@ export class NotificationHub extends DurableObject<Env> {
       }
     });
     this.invalidate();
+    if (policyChanged) {
+      try { await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined); }
+      catch { await this.ensureAlarm(Date.now()+100); }
+    }
     return this.getSubscriber(chatId)!;
   }
 
@@ -904,6 +974,10 @@ export class NotificationHub extends DurableObject<Env> {
   getIncidentOverview() { return this.cached('incident-overview', () => this.automation.overview()); }
 
   async actOnIncident(id: string, raw: unknown, actorChatId?: string): Promise<{incident: Incident}> {
+    return this.withQuota(() => ({notifications: 0, subscribers: 0, pending: this.pendingIncidentExpansion()}), () => this.actOnIncidentReserved(id, raw, actorChatId), true);
+  }
+
+  private async actOnIncidentReserved(id: string, raw: unknown, actorChatId?: string): Promise<{incident: Incident}> {
     const runtime = await this.runtime();
     if (!runtime.enabled) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: This tenant is disabled.');
     const incident = this.ctx.storage.transactionSync(() => {
@@ -1060,6 +1134,19 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   async handleUpdate(update: unknown): Promise<void> {
+    if (!update || typeof update !== 'object' || !Number.isSafeInteger((update as Record<string, unknown>).update_id)) return;
+    return this.withQuota(runtime => {
+      const value = update as {update_id: number; message?: {text?: string; chat?: {id?: number; type?: string}}};
+      if (!runtime.enabled || runtime.botEnabled === false || this.rows('SELECT id FROM telegram_updates WHERE id = ?', value.update_id).length) return {notifications: 0, subscribers: 0, pending: 0};
+      const message = value.message;
+      const start = message?.chat?.type === 'private' && Number.isSafeInteger(message.chat.id) && typeof message.text === 'string' && /^\/start(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(message.text);
+      const previous = start ? this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', String(message!.chat!.id))[0] : undefined;
+      const subscribers = start && previous?.banned !== 1 && previous?.active !== 1 ? 1 : 0;
+      return {notifications: 0, subscribers, pending: 1 + this.pendingIncidentExpansion()};
+    }, () => this.handleUpdateReserved(update));
+  }
+
+  private async handleUpdateReserved(update: unknown): Promise<void> {
     if (!update || typeof update !== 'object') return;
     const value = update as Record<string, unknown>;
     if (!Number.isSafeInteger(value.update_id)) return;
@@ -1082,7 +1169,7 @@ export class NotificationHub extends DurableObject<Env> {
       const now = Date.now();
       this.sql.exec('INSERT INTO telegram_updates (id, received_at) VALUES (?, ?)', updateId, now);
       if (ownsCallback && callback) {
-        if (!runtime.enabled) return;
+        if (!runtime.enabled || runtime.botEnabled === false) return;
         const chatId = String(callback.message!.chat!.id);
         const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
         if (!subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
@@ -1139,7 +1226,7 @@ export class NotificationHub extends DurableObject<Env> {
         const command = /^\/(start|stop|apps|all|preferences|timezone|quiet)(?:@[A-Za-z0-9_]+)?(?:\s|$)/.exec(message.text)?.[1];
         if (command === 'start') {
           // Opt-out events remain valid while disabled; disabled tenants cannot enroll users.
-          if (!runtime.enabled) return;
+          if (!runtime.enabled || runtime.botEnabled === false) return;
           const previous = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
           if (previous?.banned === 1) return;
           const activating = !previous || previous.active !== 1;
@@ -1162,7 +1249,7 @@ export class NotificationHub extends DurableObject<Env> {
         } else if (command === 'stop') this.deactivate(chatId, 'Subscriber stopped notifications.');
         else if (command === 'preferences' || command === 'timezone' || command === 'quiet') {
           const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
-          if (!runtime.enabled || !subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
+          if (!runtime.enabled || runtime.botEnabled === false || !subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
           if (command !== 'preferences') {
             const prefs = this.getSubscriberPreferences(chatId);
             const {version, ...patch} = prefs;
@@ -1176,7 +1263,7 @@ export class NotificationHub extends DurableObject<Env> {
         }
         else if (command === 'apps' || command === 'all') {
           const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
-          if (!runtime.enabled || !subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
+          if (!runtime.enabled || runtime.botEnabled === false || !subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
           if (command === 'all') this.changeApplications(chatId, null);
           if (!this.queueApplicationPrompt(chatId, this.allowedApplications(chatId), runtime)) return new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is no capacity for the application preferences menu.');
         }
@@ -1190,10 +1277,11 @@ export class NotificationHub extends DurableObject<Env> {
       }
     });
     this.cleanup();
-    if (acknowledge && runtime.botToken) {
+    const latest = acknowledge ? await this.runtime() : runtime;
+    if (acknowledge && latest.enabled && latest.botEnabled !== false && latest.botToken) {
       // Acknowledging a button does not send another message or change delivery outcomes.
       try {
-        await telegramCall(runtime.botToken, 'answerCallbackQuery', {
+        await telegramCall(latest.botToken!, 'answerCallbackQuery', {
           callback_query_id: callback!.id,
           text: acknowledgement
         });
@@ -1353,6 +1441,7 @@ export class NotificationHub extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now() + 30_000);
     this.recoverInterrupted();
     this.cleanup();
+    await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined);
     let runtime: TenantRuntime | null = null;
     let runtimeUnavailable = true;
     try {
@@ -1364,12 +1453,18 @@ export class NotificationHub extends DurableObject<Env> {
           runtime = await this.runtime();
           runtimeUnavailable = false;
         }
-        if (!runtime.enabled || !runtime.botToken) break;
+        if (!runtime.enabled || runtime.botEnabled === false || !runtime.botToken) break;
         const settings = this.getSettings();
         if (settings.paused) break;
         const now = Date.now();
-        this.processIncidentDeadlines(runtime, now);
-        this.flushIncidentRefreshes(now);
+        // Reserve only the local growth step. Release before Telegram HTTP so
+        // incident updates and user revocations can interleave with an attempt.
+        await this.withQuota(current => ({notifications: 0, subscribers: 0, pending: current.enabled && current.botEnabled !== false && !this.settings.paused ? this.pendingIncidentExpansion() + this.automation.due(now).length : 0}), async () => {
+          const current = await this.runtime();
+          if (!current.enabled || current.botEnabled === false || this.settings.paused) return;
+          this.processIncidentDeadlines(current, now);
+          this.flushIncidentRefreshes(now);
+        });
         const globalNext = Number(this.rows("SELECT value FROM queue_state WHERE key = 'next_send_at'")[0]?.value ?? 0);
         if (globalNext > now) break;
         const delivery = this.rows<DeliveryRow>(`SELECT d.*, json_extract(n.input, '$.applicationId') AS application_id
@@ -1404,14 +1499,15 @@ export class NotificationHub extends DurableObject<Env> {
           this.invalidate();
           continue;
         }
-        await this.deliver(delivery, runtime.botToken);
+        await this.deliver(delivery);
+        await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined);
       }
     } finally {
-      await this.scheduleRemaining(!!runtime?.enabled && !!runtime?.botToken, wakeEpoch, runtimeUnavailable);
+      await this.scheduleRemaining(!!runtime?.enabled && runtime?.botEnabled !== false && !!runtime?.botToken, wakeEpoch, runtimeUnavailable);
     }
   }
 
-  private async deliver(delivery: DeliveryRow, botToken: string): Promise<void> {
+  private async deliver(delivery: DeliveryRow): Promise<void> {
     let batch: DeliveryRow[] = [delivery];
     let editing = false;
     try {
@@ -1493,7 +1589,42 @@ export class NotificationHub extends DurableObject<Env> {
       }
       const method = editing ? 'editMessageText' : rich ? 'sendRichMessage' : isPhoto ? 'sendPhoto' : 'sendMessage';
       if (editing) delete payload.disable_notification;
-      const result = await telegramCall(botToken,method,payload);
+      // The final registry read also refreshes application restrictions and token
+      // rotations. No await may separate this check from starting the HTTP call.
+      const sendEpoch = this.wakeEpoch;
+      let fresh: TenantRuntime;
+      try { fresh = await this.runtime(); }
+      catch {
+        for (const item of batch) this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=?, updated_at=? WHERE id=?", Date.now()+30000, Date.now(), item.id);
+        return;
+      }
+      if (!fresh.enabled || fresh.botEnabled === false || !fresh.botToken || this.settings.paused || sendEpoch !== this.wakeEpoch) {
+        for (const item of batch) this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=?, updated_at=? WHERE id=?", Date.now()+100, Date.now(), item.id);
+        return;
+      }
+      if (batch.some(item => !this.acceptsDelivery(item))) {
+        for (const item of batch) this.sql.exec('UPDATE deliveries SET status=?, error=?, updated_at=? WHERE id=?', this.acceptsDelivery(item) ? 'pending' : 'skipped', 'Audience changed before delivery.', Date.now(), item.id);
+        return;
+      }
+      const preferenceChanged = batch.some(item => {
+        const input = this.deliveryInput(item);
+        if (!input) return false;
+        const policy = this.automation.getPolicy(input.applicationId).policy;
+        const preferences = this.getSubscriberPreferences(item.chat_id);
+        const decision = evaluateDelivery(input, policy, preferences, Date.now());
+        const metadata = JSON.parse(item.system_payload || '{}');
+        return decision.mode === 'mute' || decision.mode === 'defer' || decision.reason === 'quiet_hours' ||
+          (decision.mode === 'digest' && (metadata.digest_version !== `${policy.version}:${preferences.version}` || Number(metadata.digest_due) > Date.now() || !metadata.digest_due));
+      });
+      if (preferenceChanged) {
+        for (const item of batch) {
+          const input = this.deliveryInput(item);
+          if (input) this.applyDeliveryPreferences({...item, next_attempt: Date.now()+100}, input, Date.now());
+          else this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=? WHERE id=?", Date.now()+100, item.id);
+        }
+        return;
+      }
+      const result = await telegramCall(fresh.botToken,method,payload);
       const messageId = Number(result.result?.message_id);
       if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new TelegramError('Telegram response is uncertain (missing message identifier).',0,true);
       const now = Date.now();

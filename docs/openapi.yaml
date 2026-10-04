@@ -3,7 +3,7 @@ openapi: "3.1.0"
 info:
   title: "Telegram Relay API"
   version: "1.0.0"
-  description: "Multi-tenant Telegram notification gateway. Each tenant has an isolated bot, audience, queue, access policy, quotas, and applications. Producers use an APPLICATION API key in Authorization: Bearer or X-API-Key. The master API_KEY is for admin login only. The header key binds application identity and display name. Explicit routes use /api/v1/tenants/{tenantId}; /api/v1 is the default-tenant alias. Producers share the tenant minute quota across applications/IPs. Admin login creates an 8-hour HttpOnly session; admin mutations require an exact Origin header. All JSON bodies are capped at 64 KiB. Acceptance is not proof of Telegram delivery."
+  description: "Multi-tenant Telegram notification gateway. Each tenant supports multiple bots with isolated audiences, queues, reports, and applications, sharing tenant quotas. Each application is immutably bound to a bot; its API key selects that bot. Disabled bots reject ingestion with 409 BOT_DISABLED. Admin hub routes select a bot via the optional botId query (default: default). Producers use an APPLICATION API key in Authorization: Bearer or X-API-Key. The master API_KEY is for admin login only. The header key binds application identity and display name. Explicit routes use /api/v1/tenants/{tenantId}; /api/v1 is the default-tenant alias. Producers share the tenant minute quota across applications/IPs. Admin login creates an 8-hour HttpOnly session; admin mutations require an exact Origin header. All JSON bodies are capped at 64 KiB. Acceptance is not proof of Telegram delivery."
 servers:
   - url: "/"
     description: "The current deployed relay origin."
@@ -73,7 +73,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -177,7 +177,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -233,7 +233,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -480,6 +480,8 @@ paths:
             format: "uri"
             example: "https://relay.example.com"
   "/api/admin/context":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminContext"
       summary: "Read the current request's source IP and country"
@@ -514,6 +516,8 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
   "/api/admin/overview":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminOverview"
       summary: "Read retained totals, seven daily UTC buckets, and recent notifications"
@@ -549,6 +553,8 @@ paths:
           "$ref": "#/components/responses/NotConfigured"
       description: "Counts derive from retained database records. Sent means Telegram accepted delivery, not that a subscriber read it. Welcome messages are excluded from notification delivery reports."
   "/api/admin/settings":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "getSettings"
       summary: "Read current settings"
@@ -631,6 +637,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/SettingsUpdate"
   "/api/admin/subscribers":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "listSubscribers"
       summary: "List private-chat subscribers"
@@ -681,6 +689,7 @@ paths:
             maxLength: 100
   "/api/admin/subscribers/{chatId}":
     parameters:
+      - $ref: '#/components/parameters/BotScope'
       - name: "chatId"
         in: "path"
         required: true
@@ -781,6 +790,8 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
   "/api/admin/notifications":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "listNotifications"
       summary: "List retained notifications"
@@ -865,7 +876,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -904,6 +915,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/AdminNotificationInput"
   "/api/admin/notifications/{id}":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminGetNotification"
       summary: "Read notification and up to 100 recipient delivery details"
@@ -951,6 +964,8 @@ paths:
             type: "string"
             format: "uuid"
   "/api/admin/status":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminStatus"
       summary: "Read cached bot/webhook status for the default tenant"
@@ -985,6 +1000,8 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
   "/api/admin/webhook":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     post:
       operationId: "registerTelegramWebhook"
       summary: "Register this HTTPS deployment as the bot's webhook"
@@ -1088,6 +1105,8 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
   "/api/admin/applications":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "listApplications"
       summary: "List default tenant applications"
@@ -1126,7 +1145,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1171,7 +1190,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1201,6 +1220,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/ApplicationCreate"
   "/api/admin/applications/{applicationId}":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     patch:
       operationId: "updateApplication"
       summary: "Rename, enable, or disable application"
@@ -1237,7 +1258,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1273,6 +1294,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/ApplicationUpdate"
   "/api/admin/applications/{applicationId}/rotate-key":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     post:
       operationId: "rotateApplicationKey"
       summary: "Replace application key and reveal it once"
@@ -1303,7 +1326,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1347,6 +1370,8 @@ paths:
                 [ ]
               additionalProperties: false
   "/api/admin/subscribers/ban":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     post:
       operationId: "banSubscribers"
       summary: "Ban or unban up to 100 default-tenant subscribers"
@@ -1384,7 +1409,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1415,6 +1440,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/BanInput"
   "/api/admin/usage":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "getTenantUsage"
       summary: "Read default-tenant usage and quotas"
@@ -1435,10 +1462,12 @@ paths:
                 properties:
                   usage:
                     "$ref": "#/components/schemas/TenantUsage"
+                  botUsage:
+                    $ref: "#/components/schemas/TenantUsage"
                   limits:
                     "$ref": "#/components/schemas/TenantLimits"
                 required:
-                  [ "usage","limits" ]
+                  [ "usage","botUsage","limits" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1453,7 +1482,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1469,6 +1498,8 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
   "/api/admin/tenants/{tenantId}/applications":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "listApplicationsForTenant"
       summary: "List selected tenant applications"
@@ -1507,7 +1538,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1560,7 +1591,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1597,6 +1628,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/ApplicationCreate"
   "/api/admin/tenants/{tenantId}/applications/{applicationId}":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     patch:
       operationId: "updateApplicationForTenant"
       summary: "Rename, enable, or disable application"
@@ -1633,7 +1666,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1676,6 +1709,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/ApplicationUpdate"
   "/api/admin/tenants/{tenantId}/applications/{applicationId}/rotate-key":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     post:
       operationId: "rotateApplicationKeyForTenant"
       summary: "Replace application key and reveal it once"
@@ -1706,7 +1741,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1757,6 +1792,8 @@ paths:
                 [ ]
               additionalProperties: false
   "/api/admin/tenants/{tenantId}/subscribers/ban":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     post:
       operationId: "banSubscribersForTenant"
       summary: "Ban or unban up to 100 selected-tenant subscribers"
@@ -1794,7 +1831,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1832,6 +1869,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/BanInput"
   "/api/admin/tenants/{tenantId}/usage":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "getTenantUsageForTenant"
       summary: "Read selected-tenant usage and quotas"
@@ -1852,10 +1891,12 @@ paths:
                 properties:
                   usage:
                     "$ref": "#/components/schemas/TenantUsage"
+                  botUsage:
+                    $ref: "#/components/schemas/TenantUsage"
                   limits:
                     "$ref": "#/components/schemas/TenantLimits"
                 required:
-                  [ "usage","limits" ]
+                  [ "usage","botUsage","limits" ]
                 additionalProperties: false
         "400":
           "$ref": "#/components/responses/BadRequest"
@@ -1870,7 +1911,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -1894,6 +1935,8 @@ paths:
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
   "/api/admin/tenants/{tenantId}/context":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminContextForTenant"
       summary: "Read the current request's source IP and country"
@@ -1936,6 +1979,8 @@ paths:
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
   "/api/admin/tenants/{tenantId}/overview":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminOverviewForTenant"
       summary: "Read retained totals, seven daily UTC buckets, and recent notifications"
@@ -1979,6 +2024,8 @@ paths:
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
   "/api/admin/tenants/{tenantId}/settings":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "getSettingsForTenant"
       summary: "Read current settings"
@@ -2076,6 +2123,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/SettingsUpdate"
   "/api/admin/tenants/{tenantId}/subscribers":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "listSubscribersForTenant"
       summary: "List private-chat subscribers"
@@ -2133,6 +2182,7 @@ paths:
             maxLength: 100
   "/api/admin/tenants/{tenantId}/subscribers/{chatId}":
     parameters:
+      - $ref: '#/components/parameters/BotScope'
       - name: "tenantId"
         in: "path"
         required: true
@@ -2240,6 +2290,8 @@ paths:
         "503":
           "$ref": "#/components/responses/NotConfigured"
   "/api/admin/tenants/{tenantId}/notifications":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "listNotificationsForTenant"
       summary: "List retained notifications"
@@ -2331,7 +2383,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -2377,6 +2429,8 @@ paths:
             schema:
               "$ref": "#/components/schemas/AdminNotificationInput"
   "/api/admin/tenants/{tenantId}/notifications/{id}":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminGetNotificationForTenant"
       summary: "Read notification and up to 100 recipient delivery details"
@@ -2431,6 +2485,8 @@ paths:
             type: "string"
             format: "uuid"
   "/api/admin/tenants/{tenantId}/status":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: "adminStatusForTenant"
       summary: "Read cached bot/webhook status for the selected tenant"
@@ -2473,6 +2529,8 @@ paths:
             pattern: "^[a-z0-9][a-z0-9_-]{1,47}$"
           description: "Tenant ID. The default tenant is named default."
   "/api/admin/tenants/{tenantId}/webhook":
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     post:
       operationId: "registerTelegramWebhookForTenant"
       summary: "Register this HTTPS deployment as the bot's webhook"
@@ -2569,7 +2627,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -2687,7 +2745,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -2750,7 +2808,7 @@ paths:
         "403":
           "$ref": "#/components/responses/Forbidden"
         "409":
-          description: "Idempotency-Key already belongs to a different normalized notification."
+          description: "BOT_DISABLED when the application bot is disabled, or Idempotency-Key already belongs to a different normalized notification."
           content:
             "application/json":
               schema:
@@ -2827,7 +2885,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -2878,7 +2936,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -2944,7 +3002,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -3003,7 +3061,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -3042,7 +3100,8 @@ paths:
   "/api/admin/tenants/{tenantId}/bot":
     put:
       operationId: "configureTenantBot"
-      summary: "Verify and privately store tenant bot token"
+      summary: "Configure the legacy default bot token"
+      deprecated: true
       tags:
         [ "Administration" ]
       security:
@@ -3076,7 +3135,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "Idempotency, tenant/application identity, ownership, or optimistic-version conflict."
+          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
           content:
             "application/json":
               schema:
@@ -3196,6 +3255,7 @@ paths:
           description: "Tenant ID. The default tenant is named default."
   /api/admin/tenants/{tenantId}/automation:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationTenantId'
     - $ref: '#/components/parameters/AutomationApplicationId'
     get:
@@ -3277,7 +3337,7 @@ paths:
           type: string
           minLength: 2
           maxLength: 48
-        description: Omit for tenant policy; provide a tenant application for its effective policy/override.
+        description: Omit for selected-bot policy; provide an application belonging to that bot for its effective policy/override.
       - name: expectedVersion
         in: query
         required: true
@@ -3309,6 +3369,7 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/automation/preview:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationTenantId'
     post:
       operationId: previewTenantAutomation
@@ -3352,6 +3413,7 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/incidents:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationTenantId'
     get:
       operationId: listTenantIncidents
@@ -3399,6 +3461,7 @@ paths:
           type: string
   /api/admin/tenants/{tenantId}/incidents/overview:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationTenantId'
     get:
       operationId: getTenantIncidentOverview
@@ -3426,6 +3489,7 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/incidents/{id}:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationTenantId'
     - $ref: '#/components/parameters/AutomationIncidentId'
     get:
@@ -3454,6 +3518,7 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/incidents/{id}/actions:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationTenantId'
     - $ref: '#/components/parameters/AutomationIncidentId'
     post:
@@ -3498,6 +3563,7 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/subscribers/{chatId}/preferences:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationTenantId'
     - $ref: '#/components/parameters/AutomationSubscriberId'
     get:
@@ -3564,6 +3630,7 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/automation:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationApplicationId'
     get:
       operationId: getDefaultAutomation
@@ -3647,7 +3714,7 @@ paths:
           type: string
           minLength: 2
           maxLength: 48
-        description: Omit for tenant policy; provide a tenant application for its effective policy/override.
+        description: Omit for selected-bot policy; provide an application belonging to that bot for its effective policy/override.
       - name: expectedVersion
         in: query
         required: true
@@ -3678,7 +3745,8 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
   /api/admin/automation/preview:
-    parameters: []
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     post:
       operationId: previewDefaultAutomation
       summary: Simulate delivery without sending
@@ -3720,7 +3788,8 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
   /api/admin/incidents:
-    parameters: []
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: listDefaultIncidents
       summary: List retained tenant incidents
@@ -3767,7 +3836,8 @@ paths:
           type: string
       description: Default-tenant alias.
   /api/admin/incidents/overview:
-    parameters: []
+    parameters:
+      - $ref: '#/components/parameters/BotScope'
     get:
       operationId: getDefaultIncidentOverview
       summary: Read incident counts and response-time metrics
@@ -3795,6 +3865,7 @@ paths:
       description: Default-tenant alias.
   /api/admin/incidents/{id}:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationIncidentId'
     get:
       operationId: getDefaultIncident
@@ -3823,6 +3894,7 @@ paths:
       description: Default-tenant alias.
   /api/admin/incidents/{id}/actions:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationIncidentId'
     post:
       operationId: actOnDefaultIncident
@@ -3866,6 +3938,7 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/subscribers/{chatId}/preferences:
     parameters:
+    - $ref: '#/components/parameters/BotScope'
     - $ref: '#/components/parameters/AutomationSubscriberId'
     get:
       operationId: getDefaultSubscriberPreferences
@@ -3931,8 +4004,799 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       description: Default-tenant alias.
+  /api/admin/tenants/{tenantId}/bots:
+    parameters:
+    - &id001
+      $ref: '#/components/parameters/AutomationTenantId'
+    get:
+      operationId: listBotsForTenant
+      summary: List or search tenant bots
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - name: search
+        in: query
+        schema:
+          type: string
+          maxLength: 80
+    post:
+      operationId: createBotForTenant
+      summary: Connect another bot to the tenant
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramBotCreate'
+  /api/admin/tenants/{tenantId}/bots/{botId}:
+    parameters:
+    - *id001
+    - $ref: '#/components/parameters/BotId'
+    get:
+      operationId: getBotForTenant
+      summary: Read public bot metadata
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      operationId: updateBotForTenant
+      summary: Edit, enable, disable, or rotate bot token
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramBotUpdate'
+  /api/admin/tenants/{tenantId}/bots/{botId}/status:
+    parameters:
+    - *id001
+    - $ref: '#/components/parameters/BotId'
+    get:
+      operationId: getBotStatusForTenant
+      summary: Read cached Telegram connection status
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/admin/tenants/{tenantId}/bots/{botId}/webhook:
+    parameters:
+    - *id001
+    - $ref: '#/components/parameters/BotId'
+    post:
+      operationId: registerBotWebhookForTenant
+      summary: Register this bot webhook on a public HTTPS origin
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotWebhookResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  maxLength: 2048
+                  description: HTTPS origin plus /telegram/{tenantId}/bots/{botId}/webhook. No credentials, query, or fragment.
+              required:
+              - url
+              additionalProperties: false
+  /api/admin/bots:
+    parameters: []
+    get:
+      operationId: listBots
+      summary: List or search tenant bots
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+      - name: search
+        in: query
+        schema:
+          type: string
+          maxLength: 80
+    post:
+      operationId: createBot
+      summary: Connect another bot to the tenant
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramBotCreate'
+  /api/admin/bots/{botId}:
+    parameters:
+    - $ref: '#/components/parameters/BotId'
+    get:
+      operationId: getBot
+      summary: Read public bot metadata
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      operationId: updateBot
+      summary: Edit, enable, disable, or rotate bot token
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramBotUpdate'
+  /api/admin/bots/{botId}/status:
+    parameters:
+    - $ref: '#/components/parameters/BotId'
+    get:
+      operationId: getBotStatus
+      summary: Read cached Telegram connection status
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/admin/bots/{botId}/webhook:
+    parameters:
+    - $ref: '#/components/parameters/BotId'
+    post:
+      operationId: registerBotWebhook
+      summary: Register this bot webhook on a public HTTPS origin
+      tags:
+      - Administration
+      security:
+      - adminSession: []
+      - localAdminSession: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BotWebhookResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AutomationNotFound'
+        '409':
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
+            stale state or enable the bot before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Telegram validation unavailable. Credentials and raw upstream details are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+        '504':
+          description: Telegram validation timed out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  maxLength: 2048
+                  description: HTTPS origin plus /telegram/{tenantId}/bots/{botId}/webhook. No credentials, query, or fragment.
+              required:
+              - url
+              additionalProperties: false
+  /telegram/{tenantId}/bots/{botId}/webhook:
+    post:
+      operationId: telegramWebhookForBot
+      summary: Receive bot-scoped Telegram updates
+      tags:
+      - Telegram
+      security:
+      - telegramWebhookSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramUpdate'
+      responses:
+        '200':
+          description: Update processed or safely ignored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    const: true
+                required:
+                - ok
+                additionalProperties: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+      parameters:
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9_-]{1,47}$
+        description: Tenant ID. The default tenant is named default.
+      - $ref: '#/components/parameters/BotId'
+      description: Requires this bot's webhook secret. Authenticated updates for a disabled tenant/bot are acknowledged
+        without enrollment or replies; /stop and blocked/left updates still preserve user opt-outs.
 components:
   parameters:
+    BotScope:
+      name: botId
+      in: query
+      required: false
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9_-]{1,47}$'
+        default: default
+      description: Bot record ID within the tenant. Selects bot settings, subscriptions, queue, reports and automation. Applications
+        GET without this filter returns all tenant applications; ingestion uses application identity instead.
+    BotId:
+      name: botId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9_-]{1,47}$'
+        minLength: 2
+        maxLength: 48
+      description: Bot record ID, not Telegram numeric identity.
     AutomationTenantId:
       name: tenantId
       in: path
@@ -3949,7 +4813,7 @@ components:
         type: string
         minLength: 2
         maxLength: 48
-      description: Omit for tenant policy; provide a tenant application for its effective policy/override.
+      description: Omit for selected-bot policy; provide an application belonging to that bot for its effective policy/override.
     AutomationOrigin:
       name: Origin
       in: header
@@ -3996,8 +4860,133 @@ components:
       type: "apiKey"
       in: "header"
       name: "X-Telegram-Bot-Api-Secret-Token"
-      description: "Selected tenant's private webhook secret. The default tenant may use TELEGRAM_WEBHOOK_SECRET until overridden."
+      description: "Selected bot's private webhook secret. The default tenant may use TELEGRAM_WEBHOOK_SECRET until overridden."
   schemas:
+    BotWebhookResult:
+      type: object
+      properties:
+        ok:
+          const: true
+        url:
+          type: string
+          format: uri
+      required: [ok, url]
+      additionalProperties: false
+    TelegramBot:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        configured:
+          type: boolean
+        telegramId:
+          type:
+          - string
+          - 'null'
+        username:
+          type:
+          - string
+          - 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        applicationCount:
+          type: integer
+          minimum: 0
+          description: Number of applications assigned to this bot.
+      required:
+      - id
+      - name
+      - enabled
+      - configured
+      - telegramId
+      - username
+      - createdAt
+      - updatedAt
+      - version
+      additionalProperties: false
+      description: Public bot metadata. Never contains tokens or webhook secrets.
+    TelegramBotCreate:
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9_-]{1,47}$
+          not:
+            const: default
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        botToken:
+          type: string
+          maxLength: 512
+          pattern: '^[1-9][0-9]*:[A-Za-z0-9_-]{5,256}$'
+          writeOnly: true
+        enabled:
+          type: boolean
+          default: true
+      required:
+      - id
+      - name
+      - botToken
+      additionalProperties: false
+    TelegramBotUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        enabled:
+          type: boolean
+        botToken:
+          type: string
+          maxLength: 512
+          pattern: '^[1-9][0-9]*:[A-Za-z0-9_-]{5,256}$'
+          writeOnly: true
+        expectedVersion:
+          type: integer
+          minimum: 1
+      additionalProperties: false
+      description: Version checked again after token validation. Token rotation must keep the Telegram identity.
+    TelegramBotResult:
+      type: object
+      properties:
+        bot:
+          $ref: '#/components/schemas/TelegramBot'
+      required:
+      - bot
+      additionalProperties: false
+    TelegramBotPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TelegramBot'
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          const: 20
+      required:
+      - items
+      - total
+      - page
+      - pageSize
+      additionalProperties: false
     AutomationLevel:
       type: string
       enum:
@@ -5365,7 +6354,7 @@ components:
           properties:
             bot:
               type: "boolean"
-              description: "Selected tenant has a privately stored bot token configured through its bot settings."
+              description: "Selected bot has a privately stored token configured through its bot settings."
             webhookSecret:
               type: "boolean"
             apiKey:
@@ -5733,6 +6722,11 @@ components:
     Application:
       type: "object"
       properties:
+        botId:
+          type: string
+          minLength: 2
+          maxLength: 48
+          description: Immutable bot record ID (not numeric Telegram identity). Defaults to the selected bot on creation; changing it after creation returns 409 APPLICATION_BOT_IMMUTABLE.
         id:
           type: "string"
           maxLength: 48
@@ -5765,11 +6759,16 @@ components:
           type: "boolean"
           description: "Whether eligible subscribers can see this application in /apps. Hiding it does not itself block otherwise-authorized delivery."
       required:
-        [ "id","name","enabled","createdAt","updatedAt","version","isLegacy","keyConfigured","audienceMode","audienceChatIds","showInDirectory" ]
+        [ "id","botId","name","enabled","createdAt","updatedAt","version","isLegacy","keyConfigured","audienceMode","audienceChatIds","showInDirectory" ]
       additionalProperties: false
     ApplicationCreate:
       type: "object"
       properties:
+        botId:
+          type: string
+          minLength: 2
+          maxLength: 48
+          description: Immutable bot record ID (not numeric Telegram identity). Defaults to the selected bot on creation; changing it after creation returns 409 APPLICATION_BOT_IMMUTABLE.
         id:
           type: "string"
           pattern: "^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$"
@@ -5801,10 +6800,15 @@ components:
               audienceChatIds:
                 maxItems: 0
       additionalProperties: false
-      description: "Creates an enabled application and returns its new key once. Audience defaults to all with an empty ID list; directory visibility defaults to true. selected with [] permits no subscribers. Every selected chat ID must already exist in this tenant or INVALID_APPLICATION (400) is returned before creation."
+      description: "Creates an enabled application and returns its new key once. Audience defaults to all with an empty ID list; directory visibility defaults to true. selected with [] permits no subscribers. Every selected chat ID must already exist in this application's bot or INVALID_APPLICATION (400) is returned before creation."
     ApplicationUpdate:
       type: "object"
       properties:
+        botId:
+          type: string
+          minLength: 2
+          maxLength: 48
+          description: Immutable bot record ID (not numeric Telegram identity). Defaults to the selected bot on creation; changing it after creation returns 409 APPLICATION_BOT_IMMUTABLE.
         name:
           type: "string"
           minLength: 1
@@ -5839,7 +6843,7 @@ components:
               audienceChatIds:
                 maxItems: 0
       additionalProperties: false
-      description: "Partial application update. Send audienceMode and audienceChatIds together; all requires [] and includes future subscribers, while selected with [] denies everyone. Selected IDs are checked in this tenant before saving. Invalid audiences return INVALID_APPLICATION (400). Concurrent changes during audience validation return STALE_APPLICATION (409), even when expectedVersion was omitted. Key rotation preserves audience and directory settings."
+      description: "Partial application update. Send audienceMode and audienceChatIds together; all requires [] and includes future subscribers, while selected with [] denies everyone. Selected IDs are checked in this application's bot before saving. Invalid audiences return INVALID_APPLICATION (400). Concurrent changes during audience validation return STALE_APPLICATION (409), even when expectedVersion was omitted. Key rotation preserves audience and directory settings."
     ApplicationAudienceChatIds:
       type: "array"
       maxItems: 1000
@@ -5847,7 +6851,7 @@ components:
       items:
         type: "string"
         pattern: "^(?:0|-?[1-9][0-9]{0,19})$"
-      description: "Up to 1,000 unique canonical decimal Telegram chat IDs belonging to existing subscribers in this tenant. No leading zeros, plus signs, or negative zero. all requires []; selected with [] denies all subscribers."
+      description: "Up to 1,000 unique canonical decimal Telegram chat IDs belonging to existing subscribers in the application's bot. No leading zeros, plus signs, or negative zero. all requires []; selected with [] denies all subscribers."
     ApplicationKeyResult:
       type: "object"
       properties:
@@ -5957,7 +6961,7 @@ components:
           schema:
             "$ref": "#/components/schemas/Error"
     NotConfigured:
-      description: "Required environment secrets are not configured."
+      description: "Required admin secret or selected bot credentials/webhook secret are not configured."
       content:
         "application/json":
           schema:

@@ -65,8 +65,38 @@ export interface Tenant {
   botUsername: string | null;
 }
 
+export interface TelegramBot {
+  id: string;
+  applicationCount?: number;
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+  telegramId: string | null;
+  username: string | null;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface TelegramBotCreate {
+  id: string;
+  name: string;
+  botToken: string;
+  enabled?: boolean;
+}
+
+export interface TelegramBotUpdate {
+  name?: string;
+  enabled?: boolean;
+  botToken?: string;
+  expectedVersion?: number;
+}
+
 // Internal RPC data only. Never serialize this to an HTTP response.
 export interface TenantRuntime extends Tenant {
+  selectedBotId: string;
+  botEnabled: boolean;
+  botVersion: number;
   botToken: string;
   webhookSecret: string;
   applicationRevision: string;
@@ -101,10 +131,13 @@ export interface BotStatus {
   checkedAt: string;
 }
 
-export const hubName = (tenantId: string) => tenantId === 'default' ? 'primary' : `tenant:${tenantId}`;
+export const hubName = (tenantId: string, botId = 'default') => botId === 'default'
+  ? tenantId === 'default' ? 'primary' : `tenant:${tenantId}`
+  : `tenant:${tenantId}:bot:${botId}`;
 
 export interface Application {
   id: string;
+  botId: string;
   name: string;
   enabled: boolean;
   createdAt: string;
@@ -119,6 +152,7 @@ export interface Application {
 
 export interface ApplicationCreate {
   id: string;
+  botId?: string;
   name: string;
   audienceMode?: 'all' | 'selected';
   audienceChatIds?: string[];
@@ -126,6 +160,7 @@ export interface ApplicationCreate {
 }
 
 export interface ApplicationUpdate {
+  botId?: string;
   name?: string;
   enabled?: boolean;
   expectedVersion?: number;
