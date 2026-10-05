@@ -1,15 +1,32 @@
 import type {NotificationInput, SourceContext} from './types';
 import type {Incident} from './automation';
+import {parseNotificationHtml} from './notification-html';
 
 // The subset of Bot API 10.3 blocks used by the notification template.
 // https://core.telegram.org/bots/api#inputrichmessage
-export type RichText = string | RichText[] | { type: 'bold' | 'code'; text: string };
+export type RichText = string | RichText[]
+  | { type: 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'subscript' | 'superscript' | 'marked' | 'code'; text: RichText }
+  | { type: 'url'; text: RichText; url: string }
+  | { type: 'email_address'; text: RichText; email_address: string }
+  | { type: 'phone_number'; text: RichText; phone_number: string };
+export interface InputRichBlockListItem {
+  blocks: InputRichBlock[];
+  value?: number;
+  type?: '1' | 'a' | 'A' | 'i' | 'I';
+}
 export type RichMessageButton = { text: string; style?: 'primary' | 'success' | 'danger' } & (
   { url: string; copy_text?: never; callback_data?: never } | { copy_text: { text: string }; url?: never; callback_data?: never } | {callback_data: string; url?: never; copy_text?: never}
   );
 export type InputRichBlock =
   | { type: 'paragraph'; text: RichText }
   | { type: 'heading'; size: number; text: RichText }
+  | { type: 'pre'; text: RichText; language?: string }
+  | { type: 'footer'; text: RichText }
+  | { type: 'divider' }
+  | { type: 'list'; items: InputRichBlockListItem[] }
+  | { type: 'blockquote'; blocks: InputRichBlock[]; credit?: RichText }
+  | { type: 'expandable_blockquote'; text: RichText; credit?: RichText }
+  | { type: 'details'; summary: RichText; blocks: InputRichBlock[]; is_open?: true }
   | { type: 'photo'; photo: { type: 'photo'; media: string } }
   | { type: 'buttons'; buttons: RichMessageButton[]; align: 'right' };
 
@@ -60,7 +77,7 @@ export function formatNotification(input: NotificationInput, source?: SourceCont
     ...(input.environment ? [`Environment: ${input.environment}`] : []),
     `Time: ${input.timestamp}`,
     ...(showCountryFlag && source && countryFlag(source.country) ? [`Origin: ${countryFlag(source.country)} ${source.country}`] : []),
-    '', input.text,
+    '', input.parseMode === 'HTML' ? parseNotificationHtml(input.text).plainText : input.text,
   ];
   if (input.metadata && Object.keys(input.metadata).length) {
     lines.push('', ...Object.entries(input.metadata).map(([key, value]) => `${key}: ${value}`));
@@ -87,7 +104,7 @@ function technicalSection(title: string, entries: [string, string][]): InputRich
   return monospaceSection(title, rows.join('\n'));
 }
 
-/** Explicit blocks keep application-controlled strings literal, including HTML, Markdown and mentions. */
+/** Only an explicitly HTML body is parsed; all template identifiers remain literal. */
 export function formatRichNotification(
   input: NotificationInput,
   source?: SourceContext,
@@ -101,13 +118,16 @@ export function formatRichNotification(
   if (input.environment) context.push(['env', input.environment]);
   context.push(['level', input.level]);
   if (showCountryFlag && source && countryFlag(source.country)) context.push(['origin', `${countryFlag(source.country)} ${source.country}`]);
+  const body: InputRichBlock[] = input.parseMode === 'HTML'
+    ? parseNotificationHtml(input.text).blocks
+    : [{type: 'paragraph', text: input.text}];
   const blocks: InputRichBlock[] = [
     {type: 'heading', size: 3, text: `${level.icon} ${input.title || level.label}`},
-    {type: 'paragraph', text: input.text},
+    ...body,
     technicalSection('CONTEXT', context),
   ];
   if (incident) {
-    blocks.splice(2, 0, technicalSection('INCIDENT', [
+    blocks.splice(1 + body.length, 0, technicalSection('INCIDENT', [
       ['status', incident.status], ['occurrences', String(incident.occurrences)],
       ['first seen', incident.firstSeenAt], ['last seen', incident.lastSeenAt],
       ...(incident.assigneeChatId ? [['owner', incident.assigneeChatId] as [string, string]] : []),
@@ -147,7 +167,8 @@ export function formatRichNotification(
 export function formatRichDigest(items: Array<{input: NotificationInput; incident?: Incident}>, timestamp: string): InputRichMessage {
   const blocks: InputRichBlock[] = [{type: 'heading', size: 3, text: `📬 Notification digest · ${items.length}`}];
   for (const {input, incident} of items.slice(0, 20)) {
-    blocks.push({type: 'paragraph', text: ['\n', {type: 'bold', text: `${LEVELS[input.level].icon} ${input.application} · ${input.title || input.event}`}, '\n', {type: 'code', text: `${input.level} · ${input.environment || 'all environments'}${incident ? ` · ${incident.occurrences} occurrences` : ''}`}, '\n', input.text.slice(0, 300)]});
+    const text = input.parseMode === 'HTML' ? parseNotificationHtml(input.text).plainText : input.text;
+    blocks.push({type: 'paragraph', text: ['\n', {type: 'bold', text: `${LEVELS[input.level].icon} ${input.application} · ${input.title || input.event}`}, '\n', {type: 'code', text: `${input.level} · ${input.environment || 'all environments'}${incident ? ` · ${incident.occurrences} occurrences` : ''}`}, '\n', [...text].slice(0, 300).join('')]});
     if (input.url) blocks.push({type: 'buttons', align: 'right', buttons: [{text: 'View details ↗', url: input.url}]});
     if (incident && incident.status !== 'resolved') blocks.push({type: 'buttons', align: 'right', buttons: [{text: 'Acknowledge', callback_data: `inc:ack:${incident.id}`}, {text: 'Resolve', style: 'success', callback_data: `inc:resolve:${incident.id}`} ]});
   }

@@ -1,0 +1,34 @@
+.notification-content-editor {
+  margin-block: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-inset);
+}
+.notification-format-picker {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-block: 0 14px;
+}
+.notification-format-picker > label { flex: 1; font-size: 11px; color: var(--muted); }
+.notification-format-picker .relay-select { width: 195px; flex: none; }
+.api-example > .notification-format-picker { padding: 14px 22px; border-bottom: 1px solid var(--line); }
+#compose-content-count { font-size: 10px; font-weight: 400; }
+.notification-html-source {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.notification-html-help { font-size: 11px; line-height: 2; color: var(--muted); }
+.notification-html-help summary { cursor: pointer; color: var(--accent); }
+.notification-html-help pre { padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--surface); }
+.notification-html-help p { margin-block: 8px; }
+.notification-html-help code { unicode-bidi: isolate; }
+@media (max-width: 480px) {
+  .notification-format-picker { align-items: stretch; flex-direction: column; gap: 8px; }
+  .notification-format-picker .relay-select { width: 100%; }
+  .notification-content-editor { padding: 12px; }
+}

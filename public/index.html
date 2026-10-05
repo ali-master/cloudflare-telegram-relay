@@ -18,10 +18,12 @@
     <link rel="stylesheet" href="/automation.css">
     <link rel="stylesheet" href="/bots.css">
     <link rel="stylesheet" href="/bot-commands.css">
+    <link rel="stylesheet" href="/notification-content.css">
     <script src="/selects.js" defer></script>
     <script src="/automation.js" defer></script>
     <script src="/bots.js" defer></script>
     <script src="/bot-commands.js" defer></script>
+    <script src="/notification-content.js" defer></script>
     <script src="/app.js" defer></script>
 </head>
 <body>
@@ -757,6 +759,7 @@
                                 </svg>
                             </button>
                         </div>
+                        <div class="notification-format-picker"><label for="api-content-format">قالب نمونهٔ درخواست</label><select id="api-content-format"><option value="">متن ساده</option><option value="HTML">HTML قالب‌بندی‌شده</option></select></div>
                         <div class="endpoint" dir="ltr"><span>POST</span><code id="api-endpoint">—</code></div>
                         <pre id="api-example" tabindex="0" dir="ltr"></pre>
                         <div class="api-code-note">ابتدا مقدار
@@ -959,6 +962,13 @@
                     </div>
                 </article>
                 <article class="card api-guide-section">
+                    <div class="card-header"><div><h2>محتوای HTML، در همان گزارش همیشگی</h2><p>برای متن اعلان، <bdi>parseMode: "HTML"</bdi> بفرستید؛ بخش‌های فنی و دکمه‌ها حفظ می‌شوند.</p></div><span class="badge neutral" dir="ltr">HTML → Rich Message</span></div>
+                    <div class="api-response-body"><p>نمونهٔ بالای این صفحه را روی «HTML قالب‌بندی‌شده» بگذارید تا درخواست آماده با آدرس همین Tenant ساخته شود. HTML فقط برای بدنهٔ پیام تفسیر می‌شود؛ عنوان و داده‌های دیگر متن ساده می‌مانند.</p>
+                    <p id="api-html-supported">قالب‌های مجاز: <code dir="ltr">b / strong · i / em · u / ins · s / strike / del · code · mark · sub / sup · tg-spoiler · a</code> و بلوک‌های <code dir="ltr">p · br · h1–h6 · pre · ul / ol / li · blockquote · footer · hr · details / summary</code>. برای اسپویلر، <code dir="ltr">span class="tg-spoiler"</code> هم مجاز است. فهرست مرتب <code>start</code>، نقل‌قول <code>expandable</code> و بخش بازشونده <code>open</code> می‌پذیرند. در <code>pre</code> می‌توانید <code dir="ltr">code class="language-X"</code> بگذارید.</p>
+                    <p>تگ‌ها باید درست بسته شوند؛ حداکثر ۱۲ لایه و ۲۰۰ بلوک یا آیتم فهرست مجاز است. اسکریپت، CSS، جدول و ویژگی‌های دیگر پشتیبانی نمی‌شوند. لینک‌های <bdi>HTTP(S)</bdi>، <bdi>mailto:</bdi>، <bdi>tel:</bdi> و <bdi>tg://user?id=…</bdi> مجازند؛ اطلاعات ورود داخل لینک پذیرفته نمی‌شود.</p>
+                    <p>برای عکس و دکمهٔ جزئیات از فیلدهای <code>image</code> و <code>url</code> استفاده کنید. تاریخچهٔ داشبورد متن خوانا و منبع HTML را جداگانه نمایش می‌دهد. در خلاصه‌های دوره‌ای، فقط چکیدهٔ متن ساده تا ۳۰۰ کاراکتر نمایش داده می‌شود. <a href="https://core.telegram.org/bots/api#rich-html-style" target="_blank" rel="noopener noreferrer">مستندات قالب‌بندی تلگرام ↗</a></p></div>
+                </article>
+                <article class="card api-guide-section">
                     <div class="card-header">
                         <div><h2>بدنهٔ درخواست</h2>
                             <p>فقط event و text ضروری‌اند؛ نام و شناسهٔ اپلیکیشن را در بدنه نفرستید.</p></div>
@@ -984,8 +994,10 @@
                             <tr>
                                 <td><code>text</code><span class="required-badge">ضروری</span></td>
                                 <td>string</td>
-                                <td>متن سادهٔ اعلان؛ حداکثر ۳۰۰۰ کاراکتر. HTML تفسیر نمی‌شود و به فراردهی نیاز ندارد.
-                                </td>
+                                <td>بدنهٔ اعلان؛ پیش‌فرض متن ساده با سقف ۳۰۰۰ کاراکتر. در حالت HTML، سقف منبع ۱۲۰۰۰ و متن پس از تبدیل ۳۰۰۰ کاراکتر است.</td>
+                            </tr>
+                            <tr>
+                                <td><code>parseMode</code></td><td><code>HTML</code></td><td>اختیاری؛ فقط فیلد <bdi>text</bdi> را با تگ‌های مجاز قالب‌بندی می‌کند. برای متن ساده، این فیلد را حذف کنید. Markdown پشتیبانی نمی‌شود.</td>
                             </tr>
                             <tr>
                                 <td><code>level</code></td>
@@ -1079,7 +1091,7 @@
                             <tr>
                                 <td><code>400 / 413</code></td>
                                 <td>بدنه یا اندازهٔ نامعتبر</td>
-                                <td>نام و مقدار فیلدها و سقف اندازهٔ پیام را بررسی کنید.</td>
+                                <td>نام و مقدار فیلدها و سقف اندازهٔ پیام را بررسی کنید. <bdi>INVALID_HTML</bdi> یعنی تگ، ویژگی یا ساختار HTML مجاز نیست؛ درخواست پیش از ورود به صف رد می‌شود.</td>
                             </tr>
                             <tr>
                                 <td><code>401</code></td>
@@ -1645,9 +1657,12 @@
         <div class="field"><label for="compose-title">عنوان <span class="muted">(اختیاری)</span></label><input
                 id="compose-title" name="title" maxlength="200" placeholder="استقرار نسخهٔ جدید با موفقیت انجام شد">
         </div>
-        <div class="field"><label for="compose-text">متن اعلان</label><textarea id="compose-text" name="text" rows="4"
-                                                                                maxlength="12000" required
-                                                                                placeholder="جزئیاتی که تیم باید بداند…"></textarea>
+        <div class="notification-content-editor">
+            <div class="notification-format-picker"><label for="compose-parse-mode">قالب متن</label><select id="compose-parse-mode" name="parseMode"><option value="">متن ساده</option><option value="HTML">HTML قالب‌بندی‌شده</option></select></div>
+            <div class="field"><label for="compose-text">متن اعلان <span id="compose-content-count" class="muted"></span></label><textarea id="compose-text" name="text" rows="5" maxlength="3000" required aria-describedby="compose-content-hint" placeholder="جزئیاتی که تیم باید بداند…"></textarea><small id="compose-content-hint">تا ۳۰۰۰ کاراکتر؛ نشانه‌ها و تگ‌ها عیناً نمایش داده می‌شوند.</small></div>
+            <details id="compose-html-help" class="notification-html-help" hidden><summary>راهنمای نوشتن HTML برای تلگرام</summary><p>از تگ‌های مجاز برای تیتر، تأکید و کد استفاده کنید. نمونهٔ زیر منبع HTML است؛ قالب‌بندی هنگام تحویل در تلگرام اعمال می‌شود.</p><pre dir="ltr" tabindex="0">&lt;p&gt;&lt;b&gt;Deployment completed&lt;/b&gt;&lt;/p&gt;
+&lt;p&gt;Version &lt;code&gt;2.4.1&lt;/code&gt; is healthy.&lt;/p&gt;
+&lt;blockquote&gt;All health checks passed.&lt;/blockquote&gt;</pre><p>برای نویسه‌های خاص از <code dir="ltr">&amp;lt; &amp;gt; &amp;amp;</code> استفاده کنید. عنوان، اطلاعات تکمیلی و برچسب‌ها همچنان متن ساده هستند.</p></details>
         </div>
         <div class="form-grid">
             <div class="field"><label for="compose-image">آدرس تصویر <span class="muted">(اختیاری)</span></label><input

@@ -180,6 +180,7 @@ export interface NotificationInput {
   level: Level;
   timestamp: string;
   text: string;
+  parseMode?: 'HTML';
   title?: string;
   image?: string;
   url?: string;
@@ -221,6 +222,7 @@ export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'unknow
 
 export interface NotificationRecord extends NotificationInput {
   id: string;
+  plainText?: string;
   incidentId?: string;
   grouped?: boolean;
   createdAt: string;

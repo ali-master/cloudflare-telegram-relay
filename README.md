@@ -107,13 +107,35 @@ See [integration recipes](docs/integrations.md) for **GitHub Actions, GitLab CI,
 
 ### Telegram message layout
 
-Notifications use Telegram's structured Rich Messages as a technical report, with an English severity heading (Info, Success, Warning, Error, or Critical), the literal body, and an optional photo inside the same message. A supplied `title` replaces the default heading. Details stay visible in paragraphs with bold section labels and monospace text: **CONTEXT** contains the application, event, environment, severity, and optional country flag; **TIME** shows numeric Jalali and Gregorian dates with a shared time in **Asia/Tehran**, using ASCII digits for both calendars. Optional **METADATA** and **TAGS** sections follow.
+Notifications use Telegram's structured Rich Messages as a technical report, with an English severity heading (Info, Success, Warning, Error, or Critical), the notification body, and an optional photo inside the same message. A supplied `title` replaces the default heading. Details stay visible in paragraphs with bold section labels and monospace text: **CONTEXT** contains the application, event, environment, severity, and optional country flag; **TIME** shows numeric Jalali and Gregorian dates with a shared time in **Asia/Tehran**, using ASCII digits for both calendars. Optional **METADATA** and **TAGS** sections follow.
 
 Technical sections use `RichTextCode` inside paragraphs instead of `pre` blocks, avoiding the preformatted block's accent background. Telegram controls client/theme colors; the API does not expose a per-level background color for these sections.
 
-Metadata keeps scalar key/value pairs intact. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters. The report uses neither tables nor collapsed sections. Actions include an optional primary incident-link button and separate event/notification-ID copy buttons; the UUID appears only through its copy button.
+Metadata keeps scalar key/value pairs intact. Long or Persian keys and values place the value beneath its key without truncation; the renderer adds no hidden direction-control characters. The generated technical sections use neither tables nor collapsed sections. Actions include an optional primary incident-link button and separate event/notification-ID copy buttons; the UUID appears only through its copy button.
 
-Keep sending the same JSON fields. Text, titles, and metadata remain literal content; submitted HTML or Markdown is not interpreted. The relay builds the formatting itself. The API retains its **3,000-character text** limit and **4,000-character complete plain-text validation** limit; these are project limits, not Telegram's Rich Message limits.
+Text is literal by default. To format only the notification body, add `"parseMode": "HTML"` beside `text`:
+
+```json
+{
+  "event": "deployment.completed",
+  "level": "success",
+  "parseMode": "HTML",
+  "text": "<p><b>Deployment completed</b></p><p>Version <code>2.4.1</code> is healthy.</p><blockquote>All health checks passed.</blockquote>",
+  "url": "https://ci.example.com/pipelines/123"
+}
+```
+
+Send this JSON to the same tenant endpoint with the application's `X-API-Key`. In the dashboard composer, choose **HTML قالب‌بندی‌شده**. The relay validates the supported HTML subset and converts it to native [Telegram Rich Message blocks](https://core.telegram.org/bots/api#rich-html-style), preserving the existing report, dates, image and action buttons. Titles, metadata and tags stay literal. Markdown is not interpreted.
+
+The supported subset is:
+
+- Inline: `b`/`strong`, `i`/`em`, `u`/`ins`, `s`/`strike`/`del`, `code`, `mark`, `sub`, `sup`, `tg-spoiler` (or `span class="tg-spoiler"`) and `a href="..."`.
+- Blocks: `p`, `br`, `h1`–`h6`, `pre` (optionally containing `code class="language-X"`), `ul`/`ol` with `li`, `blockquote` (optionally `expandable`), `footer`, `hr`, and `details` with a first-child `summary` (optionally `open`). Ordered lists may set a positive integer `start`.
+- Links: HTTP(S), `mailto:`, `tel:` and `tg://user?id=123456789`; credentials and control characters are rejected. Standard named and numeric HTML entities are decoded.
+
+Close non-void tags and nest them correctly. Quote attribute values; boolean attributes may be bare. Other attributes, CSS, scripts, tables, embedded media and custom buttons are unsupported; use the notification's `image` and `url` fields for media and its primary action. Nesting is limited to 12 levels and content to 200 blocks/list items.
+
+HTML bodies allow up to **12,000 source characters** and **3,000 characters after parsing**. Plain-text bodies still allow 3,000 characters; the **4,000-character complete plain-text validation** limit applies to both modes. These are relay limits. Unsupported tags or attributes, unsafe links and malformed HTML return **400 `INVALID_HTML`** before queuing. Escape literal `&`, `<` and `>` as `&amp;`, `&lt;` and `&gt;`. Notification responses retain the source in `text` and include a read-only `plainText` body for HTML notifications; dashboard previews use this text without executing HTML. Digest entries use a plain-text summary of up to 300 characters; full HTML formatting appears in the individual notification.
 
 The renderer uses the [Telegram Bot API's Rich Messages and buttons](https://core.telegram.org/bots/api#sendrichmessage). Telegram describes rendering in [supported clients](https://core.telegram.org/bots/features#messages-and-formatting), but does not document a minimum client version or guarantee an automatic fallback for older clients.
 

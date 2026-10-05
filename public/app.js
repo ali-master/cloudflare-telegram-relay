@@ -1836,7 +1836,16 @@ async function openDetail(id) {
     }
     container.append(grid);
     if (record.title) container.append(node('h3', 'detail-section-title', record.title));
-    container.append(node('div', 'detail-text', record.text));
+    const bodyText = node('div', 'detail-text', record.plainText ?? record.text);
+    bodyText.dir = 'auto';
+    container.append(bodyText);
+    if (record.parseMode === 'HTML') {
+      const sourceDetails = node('details', 'notification-html-help');
+      const source = node('pre', 'notification-html-source', record.text);
+      source.dir = 'ltr';
+      sourceDetails.append(node('summary', '', 'مشاهدهٔ منبع HTML · قالب‌بندی در تلگرام'), source);
+      container.append(sourceDetails);
+    }
     const links = node('div', 'detail-links');
     for (const [url, label] of [[record.image, 'باز کردن تصویر ↗'], [record.url, 'مشاهدهٔ لینک جزئیات ↗']]) {
       const link = safeExternalLink(url, label);
@@ -2297,6 +2306,7 @@ $('#compose-form').addEventListener('submit', async event => {
     text: String(form.get('text')),
     silent: form.has('silent')
   };
+  if (form.get('parseMode') === 'HTML') input.parseMode = 'HTML';
   for (const key of ['environment', 'title', 'image', 'url']) {
     const value = String(form.get(key) || '').trim();
     if (value) input[key] = value;
@@ -2378,7 +2388,8 @@ function updateApiExample() {
       event: 'deployment.completed',
       level: 'success',
       title: 'استقرار نسخهٔ جدید',
-      text: 'نسخهٔ جدید با موفقیت در محیط اصلی مستقر شد.',
+      text: $('#api-content-format').value === 'HTML' ? '<p><b>Deployment completed</b></p><p>Version <code>2.4.1</code> is healthy.</p><blockquote>All health checks passed.</blockquote>' : 'نسخهٔ جدید با موفقیت در محیط اصلی مستقر شد.',
+      ...($('#api-content-format').value === 'HTML' ? {parseMode: 'HTML'} : {}),
       environment: 'production',
       url: 'https://ci.example.com/pipelines/123',
       metadata: {version: '2.4.0', commit: 'a1b2c3d', duration: '42s'},
@@ -2400,6 +2411,7 @@ window.RelayBots.init({$, state, node, icon, count, showError, toast, api, tenan
 window.RelayBotCommands.init({$, state, node, count, busy, toast, api, tenantPath});
 window.RelayAutomation.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects});
 updateApiExample();
+$('#api-content-format').addEventListener('change', updateApiExample);
 for (const [selector, getExample] of [['#copy-example', () => curlExample], ['#copy-status-example', () => statusExample]]) {
   $(selector).addEventListener('click', async () => {
     const example = getExample();

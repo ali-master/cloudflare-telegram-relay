@@ -2,6 +2,7 @@ import { AppError, DEFAULT_SETTINGS, LEVELS, type NotificationInput, type Settin
 import { validIpRule } from './security';
 import { formatNotification } from './telegram';
 import { COUNTRY_CODES } from './countries';
+import { parseNotificationHtml } from './notification-html';
 
 export function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AppError(400, 'INVALID_BODY', 'بدنه درخواست باید یک شیء JSON باشد.');
@@ -21,8 +22,9 @@ function safeUrl(value: unknown, field: string): string | undefined {
 }
 export function notificationInput(value: unknown, source: SourceContext): NotificationInput {
   const data = object(value);
-  const allowed = ['application', 'event', 'level', 'timestamp', 'text', 'title', 'image', 'url', 'environment', 'metadata', 'tags', 'silent', 'fingerprint', 'incidentStatus'];
+  const allowed = ['application', 'event', 'level', 'timestamp', 'text', 'parseMode', 'title', 'image', 'url', 'environment', 'metadata', 'tags', 'silent', 'fingerprint', 'incidentStatus'];
   for (const key of Object.keys(data)) if (!allowed.includes(key)) invalid(key);
+  if (data.parseMode !== undefined && data.parseMode !== 'HTML') invalid('parseMode');
   const level = data.level ?? 'info';
   if (!LEVELS.includes(level as never)) invalid('level');
   let timestamp = data.timestamp === undefined ? new Date().toISOString() : string(data.timestamp, 'timestamp', 40)!;
@@ -34,8 +36,13 @@ export function notificationInput(value: unknown, source: SourceContext): Notifi
   timestamp = new Date(timestamp).toISOString();
   const input: NotificationInput = {
     application: string(data.application, 'application', 80)!, event: string(data.event, 'event', 80)!,
-    text: string(data.text, 'text', 3000)!, level: level as NotificationInput['level'], timestamp,
+    text: string(data.text, 'text', data.parseMode === 'HTML' ? 12_000 : 3000)!, level: level as NotificationInput['level'], timestamp,
   };
+  if (data.parseMode === 'HTML') {
+    input.parseMode = 'HTML';
+    const {plainText} = parseNotificationHtml(input.text);
+    if (!plainText.trim() || plainText.length > 3000) invalid('text (maximum 3000 visible characters)');
+  }
   for (const [key, max] of [['title', 160], ['environment', 80]] as const) {
     const val = string(data[key], key, max, false); if (val) input[key] = val;
   }

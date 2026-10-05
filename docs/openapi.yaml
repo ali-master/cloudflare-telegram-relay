@@ -5823,9 +5823,13 @@ components:
           minLength: 1
         text:
           type: "string"
-          maxLength: 3000
+          maxLength: 12000
           minLength: 1
-          description: "Literal notification body. HTML and Markdown are not parsed. The relay applies its own rich layout; 3,000 characters is the relay limit."
+          description: "Body source. With parseMode omitted, literal text with a 3,000-character limit. With parseMode HTML, at most 12,000 source characters and 3,000 characters after parsing. The complete formatted plain-text message remains limited to 4,000 characters. Markdown is not parsed."
+        parseMode:
+          type: "string"
+          enum: ["HTML"]
+          description: "Optional HTML formatting for text only, converted to Telegram Rich Message blocks. Omit for literal text. Titles, metadata, tags and other fields remain literal. Unsupported tags/attributes, unsafe links or malformed HTML fail with HTTP 400 INVALID_HTML before queuing. See https://core.telegram.org/bots/api#rich-html-style and README for the supported subset."
         level:
           type: "string"
           enum:
@@ -5883,7 +5887,7 @@ components:
       required:
         [ "event","text" ]
       additionalProperties: false
-      description: "Application identity/name come from the header key. Unknown fields (including caller-supplied applicationId or chat_id) are rejected. Strings are trimmed and supplied text, titles, and metadata are literal; HTML/Markdown is not interpreted. The relay builds a Telegram Rich Message technical report with an English severity heading (Info, Success, Warning, Error, or Critical) unless a literal title is supplied, literal body, and optional embedded photo. Always-visible paragraphs with bold section labels and monospace text include CONTEXT for application/event/environment/severity and optional country flag, TIME for numeric Jalali/Gregorian dates and a shared Asia/Tehran time using ASCII digits, and optional METADATA and TAGS. Technical sections use RichTextCode inside paragraphs instead of pre blocks to avoid the preformatted block accent background. Colors remain client/theme-dependent; per-level section background colors are not exposed by the API. There are no tables or collapsed sections. Long or Persian metadata keys and values place the value beneath its key without truncation or renderer-added hidden direction-control characters. Actions include an optional primary URL button and separate event/notification-ID copy buttons; the UUID is available only through its copy button. The 3,000-character text limit and 4,000-character full formatted plain-text validation limit are relay policy, not Telegram Rich Message limits. Rendering depends on Telegram client support; no minimum client version or automatic fallback is guaranteed. See https://core.telegram.org/bots/api#sendrichmessage and https://core.telegram.org/bots/features#messages-and-formatting."
+      description: "Application identity/name come from the header key. Unknown fields (including caller-supplied applicationId or chat_id) are rejected. Strings are trimmed. Body text is literal unless parseMode is HTML; titles and metadata always remain literal. Markdown is not interpreted. The relay builds a Telegram Rich Message technical report with an English severity heading (Info, Success, Warning, Error, or Critical) unless a literal title is supplied, the body, and optional embedded photo. Always-visible paragraphs with bold section labels and monospace text include CONTEXT for application/event/environment/severity and optional country flag, TIME for numeric Jalali/Gregorian dates and a shared Asia/Tehran time using ASCII digits, and optional METADATA and TAGS. Technical sections use RichTextCode inside paragraphs instead of pre blocks to avoid the preformatted block accent background. Colors remain client/theme-dependent; per-level section background colors are not exposed by the API. The generated technical sections have no tables or collapsed sections. Long or Persian metadata keys and values place the value beneath its key without truncation or renderer-added hidden direction-control characters. Actions include an optional primary URL button and separate event/notification-ID copy buttons; the UUID is available only through its copy button. The 3,000-character plain/parsed body limit, 12,000-character HTML source limit and 4,000-character full formatted plain-text validation limit are relay policy, not Telegram Rich Message limits. Rendering depends on Telegram client support; no minimum client version or automatic fallback is guaranteed. See https://core.telegram.org/bots/api#sendrichmessage and https://core.telegram.org/bots/features#messages-and-formatting."
       examples:
         - event: "deployment.completed"
           level: "success"
@@ -5893,6 +5897,25 @@ components:
             version: "2.4.1"
           tags:
             [ "deploy" ]
+        - event: "deployment.completed"
+          level: "success"
+          parseMode: "HTML"
+          text: "<p><b>Deployment completed</b></p><p>Version <code>2.4.1</code> is healthy.</p>"
+      allOf:
+        - if:
+            required: [parseMode]
+            properties:
+              parseMode:
+                const: HTML
+          then:
+            properties:
+              text:
+                maxLength: 12000
+          else:
+            properties:
+              text:
+                maxLength: 3000
+
     NotificationRecord:
       type: "object"
       properties:
@@ -5917,9 +5940,18 @@ components:
           minLength: 1
         text:
           type: "string"
-          maxLength: 3000
+          maxLength: 12000
           minLength: 1
-          description: "Literal notification body. HTML and Markdown are not parsed. The relay applies its own rich layout; 3,000 characters is the relay limit."
+          description: "Body source. With parseMode omitted, literal text with a 3,000-character limit. With parseMode HTML, at most 12,000 source characters and 3,000 characters after parsing. The complete formatted plain-text message remains limited to 4,000 characters. Markdown is not parsed."
+        plainText:
+          type: "string"
+          maxLength: 3000
+          readOnly: true
+          description: "Parsed visible body, included for HTML notifications. Suitable for plain-text previews; text retains the original HTML source."
+        parseMode:
+          type: "string"
+          enum: ["HTML"]
+          description: "Optional HTML formatting for text only, converted to Telegram Rich Message blocks. Omit for literal text. Titles, metadata, tags and other fields remain literal. Unsupported tags/attributes, unsafe links or malformed HTML fail with HTTP 400 INVALID_HTML before queuing. See https://core.telegram.org/bots/api#rich-html-style and README for the supported subset."
         level:
           type: "string"
           enum:
@@ -6013,6 +6045,21 @@ components:
       required:
         [ "application","event","text","level","timestamp","id","createdAt","source","status","total","sent","failed","pending","unknown","skipped" ]
       additionalProperties: false
+      allOf:
+        - if:
+            required: [parseMode]
+            properties:
+              parseMode:
+                const: HTML
+          then:
+            properties:
+              text:
+                maxLength: 12000
+          else:
+            properties:
+              text:
+                maxLength: 3000
+
     Acceptance:
       type: "object"
       properties:
@@ -6657,9 +6704,13 @@ components:
           minLength: 1
         text:
           type: "string"
-          maxLength: 3000
+          maxLength: 12000
           minLength: 1
-          description: "Literal notification body. HTML and Markdown are not parsed. The relay applies its own rich layout; 3,000 characters is the relay limit."
+          description: "Body source. With parseMode omitted, literal text with a 3,000-character limit. With parseMode HTML, at most 12,000 source characters and 3,000 characters after parsing. The complete formatted plain-text message remains limited to 4,000 characters. Markdown is not parsed."
+        parseMode:
+          type: "string"
+          enum: ["HTML"]
+          description: "Optional HTML formatting for text only, converted to Telegram Rich Message blocks. Omit for literal text. Titles, metadata, tags and other fields remain literal. Unsupported tags/attributes, unsafe links or malformed HTML fail with HTTP 400 INVALID_HTML before queuing. See https://core.telegram.org/bots/api#rich-html-style and README for the supported subset."
         level:
           type: "string"
           enum:
@@ -6721,7 +6772,7 @@ components:
       required:
         [ "applicationId","event","text" ]
       additionalProperties: false
-      description: "Dashboard broadcasts require an enabled applicationId in this tenant. Its configured name replaces application. Content remains literal and uses the same relay-generated Telegram Rich Message layout as producer notifications. The 3,000-character text and 4,000-character full formatted plain-text validation limits also apply."
+      description: "Dashboard broadcasts require an enabled applicationId in this tenant. Its configured name replaces application. Uses the same relay-generated Telegram Rich Message layout as producer notifications. Optional parseMode HTML formats only text; omit for literal content. The 3,000-character plain/parsed body, 12,000-character HTML source and 4,000-character full formatted plain-text validation limits apply."
       examples:
         - event: "deployment.completed"
           level: "success"
@@ -6732,6 +6783,26 @@ components:
           tags:
             [ "deploy" ]
           applicationId: "payments-api"
+        - event: "deployment.completed"
+          level: "success"
+          parseMode: "HTML"
+          text: "<p><b>Deployment completed</b></p><p>Version <code>2.4.1</code> is healthy.</p>"
+          applicationId: "payments-api"
+      allOf:
+        - if:
+            required: [parseMode]
+            properties:
+              parseMode:
+                const: HTML
+          then:
+            properties:
+              text:
+                maxLength: 12000
+          else:
+            properties:
+              text:
+                maxLength: 3000
+
     TenantLimits:
       type: "object"
       properties:

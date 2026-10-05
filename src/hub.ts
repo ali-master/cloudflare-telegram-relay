@@ -20,6 +20,7 @@ import {formatRichDigest} from './rich-message';
 import {formatNotification, formatRichNotification, telegramCall, TelegramError} from './telegram';
 import {LEGACY_WELCOME_MESSAGE, subscriptionMenu} from './subscription-menu';
 import {parseBotCommand} from './bot-commands';
+import {parseNotificationHtml} from './notification-html';
 
 type Row = Record<string, SqlStorageValue>;
 type DirectoryApplication = Pick<Application, 'id' | 'name'>;
@@ -682,8 +683,10 @@ export class NotificationHub extends DurableObject<Env> {
     else if (sent === total) status = 'completed';
     else if (failed === total && !photoDelivered) status = 'failed';
     else status = 'partial';
+    const input = JSON.parse(row.input) as NotificationInput;
     return {
-      ...JSON.parse(row.input) as NotificationInput,
+      ...input,
+      ...(input.parseMode === 'HTML' ? {plainText: parseNotificationHtml(input.text).plainText} : {}),
       ...(incidentId ? {incidentId: String(incidentId), grouped: incident.grouped === 1} : {}),
       id: row.id,
       source: JSON.parse(row.source),
