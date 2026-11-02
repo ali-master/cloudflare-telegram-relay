@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: relay-celld
+  labels:
+    relay-deploy-phase: runtime
+spec:
+  serviceName: relay-celld-peers
+  # deploy.sh applies the runtime only after publishing completes.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: relay-celld
+  template:
+    metadata:
+      labels:
+        app: relay-celld
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: celld
+          image: relay-celld:0.6.3
+          imagePullPolicy: IfNotPresent
+          args: [serve]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: peer
+              containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: relay-celld-config
+            - secretRef:
+                name: relay-celld-storage
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: CELLD_ADVERTISE
+              value: $(POD_IP):8081
+          startupProbe:
+            httpGet:
+              path: /.well-known/celld/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /.well-known/celld/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/celld
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 2Gi

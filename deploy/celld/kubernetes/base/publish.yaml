@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: relay-celld-publish
+  labels:
+    relay-deploy-phase: publish
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: relay-celld-publish
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: publish
+          image: relay-celld:0.6.3
+          imagePullPolicy: IfNotPresent
+          args: [publish]
+          envFrom:
+            - configMapRef:
+                name: relay-celld-config
+            - secretRef:
+                name: relay-celld-storage
+          env:
+            - name: RELAY_API_KEY_FILE
+              value: /run/relay-secrets/API_KEY
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: relay-secrets
+              mountPath: /run/relay-secrets
+              readOnly: true
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: relay-secrets
+          secret:
+            secretName: relay-celld-admin
+            defaultMode: 0440
+        - name: temporary
+          emptyDir: {}

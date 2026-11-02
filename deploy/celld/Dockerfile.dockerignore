@@ -1,0 +1,16 @@
+**
+!package.json
+!package-lock.json
+!wrangler.jsonc
+!src
+!src/**
+!public
+!public/**
+!deploy
+!deploy/celld
+!deploy/celld/Dockerfile
+!deploy/celld/build.mjs
+!deploy/celld/package.json
+!deploy/celld/package-lock.json
+!deploy/celld/entrypoint.sh
+!deploy/celld/publish.mjs

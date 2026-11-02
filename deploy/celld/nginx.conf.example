@@ -1,0 +1,38 @@
+# Host nginx example: replace the domain and certificate paths before loading.
+# Keep the Compose listener bound to 127.0.0.1 and set
+# CELLD_TRUST_FORWARDED_HEADERS=1 in deploy/celld/.env.
+# If another load balancer sits in front, configure real_ip only for its trusted
+# addresses before using $remote_addr as the verified client IP.
+server {
+    listen 80;
+    server_name relay.example.com;
+    if ($host != relay.example.com) { return 444; }
+    return 308 https://relay.example.com$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name relay.example.com;
+    if ($host != relay.example.com) { return 444; }
+
+    ssl_certificate /etc/letsencrypt/live/relay.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/relay.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 64k;
+
+    location = /.well-known/celld/health { return 404; }
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host relay.example.com;
+        proxy_set_header X-Forwarded-Host relay.example.com;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header CF-Connecting-IP $remote_addr;
+        proxy_set_header CF-Ray "";
+        proxy_read_timeout 65s;
+    }
+}

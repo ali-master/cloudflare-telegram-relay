@@ -1,0 +1,64 @@
+name: telegram-relay
+
+x-image: &image
+  image: ${RELAY_IMAGE:-relay-celld:0.6.3}
+  build:
+    context: ../..
+    dockerfile: deploy/celld/Dockerfile
+
+x-storage: &storage
+  CELLD_BUCKET: ${CELLD_BUCKET:?Set CELLD_BUCKET in deploy/celld/.env}
+  S3_ENDPOINT: ${S3_ENDPOINT:-}
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+  CELLD_DURABILITY: bucket
+
+services:
+  # Publication is an explicit release step. Starting or restarting relay does
+  # not redeploy the bundle or change its stored admin key.
+  publish:
+    <<: *image
+    profiles: [tools]
+    command: [publish]
+    environment:
+      <<: *storage
+      RELAY_API_KEY_FILE: /run/secrets/relay_api_key
+    secrets: [relay_api_key]
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 60s
+
+  relay:
+    <<: *image
+    command: [serve]
+    environment:
+      <<: *storage
+      CELLD_ADVERTISE: relay:8081
+      CELLD_TRUST_FORWARDED_HEADERS: ${CELLD_TRUST_FORWARDED_HEADERS:-0}
+      CELLD_MAX_REQUEST_BODY_BYTES: "1048576"
+      CELLD_SHUTDOWN_TOTAL_MS: "40000"
+    ports:
+      - "${RELAY_BIND_ADDRESS:-127.0.0.1}:${RELAY_PORT:-8080}:8080"
+    volumes:
+      - state:/var/lib/celld
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/.well-known/celld/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      start_period: 300s
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+secrets:
+  relay_api_key:
+    file: ${RELAY_API_KEY_FILE:-./secrets/API_KEY}
+
+volumes:
+  state:

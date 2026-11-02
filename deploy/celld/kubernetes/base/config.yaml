@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-celld-config
+  labels:
+    relay-deploy-phase: configuration
+data:
+  CELLD_BUCKET: s3://replace-me/telegram-relay
+  S3_ENDPOINT: ""
+  AWS_REGION: us-east-1
+  CELLD_DURABILITY: bucket
+  CELLD_STATE_DIR: /var/lib/celld
+  CELLD_MAX_REQUEST_BODY_BYTES: "1048576"
+  CELLD_SHUTDOWN_TOTAL_MS: "40000"
+  # Enable only behind a proxy that replaces the forwarded/IP headers.
+  CELLD_TRUST_FORWARDED_HEADERS: "0"

@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: telegram-relay
+resources:
+  - ../../base
+images:
+  - name: relay-celld
+    newName: registry.example.com/your-team/telegram-relay
+    newTag: CHANGE_ME
+    # Prefer replacing newTag with digest: sha256:<your published image digest>.
+patches:
+  - target:
+      kind: ConfigMap
+      name: relay-celld-config
+    patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: relay-celld-config
+      data:
+        CELLD_BUCKET: s3://replace-me/telegram-relay
+        AWS_REGION: us-east-1
+        # Keep empty for AWS S3; set an HTTPS endpoint for compatible storage.
+        S3_ENDPOINT: ""
+        # Set to "1" only after installing the trusted HTTPS gateway.
+        CELLD_TRUST_FORWARDED_HEADERS: "0"
+  - target:
+      kind: StatefulSet
+      name: relay-celld
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: relay-celld
+      spec:
+        volumeClaimTemplates:
+          - metadata:
+              name: state
+            spec:
+              accessModes: [ReadWriteOnce]
+              # Uncomment and choose your cluster's durable storage class.
+              # storageClassName: your-storage-class
+              resources:
+                requests:
+                  storage: 10Gi

@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-celld
+  labels:
+    relay-deploy-phase: configuration
+spec:
+  type: ClusterIP
+  selector:
+    app: relay-celld
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-celld-peers
+  labels:
+    relay-deploy-phase: configuration
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: relay-celld
+  ports:
+    - name: peer
+      port: 8081
+      targetPort: peer

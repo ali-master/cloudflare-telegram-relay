@@ -1,0 +1,9 @@
+{
+  "name": "telegram-relay-celld-build",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "esbuild": "0.28.1",
+    "jsonc-parser": "3.3.1"
+  }
+}

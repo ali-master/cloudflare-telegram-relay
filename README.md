@@ -1,6 +1,6 @@
 # Telegram Relay
 
-A lightweight Telegram notification gateway for monitoring, alerts, and CI/CD, running on Cloudflare Workers.
+A lightweight Telegram notification gateway for monitoring, alerts, and CI/CD. Deploy to Cloudflare Workers, or run the same application on your own servers with Docker or Kubernetes using celld.
 
 Each **tenant** can connect multiple Telegram bots, with separate applications, subscribers, queues, and reports for each bot. Each **application** gets its own API key and belongs to one bot. Tenant quotas are shared across its bots.
 
@@ -14,6 +14,18 @@ Each **tenant** can connect multiple Telegram bots, with separate applications, 
 - Bot defaults and application-specific delivery rules, with a preview of each routing decision.
 - Searchable bot management with independent enable/disable controls and explicit `BOT_DISABLED` errors.
 - Recipient level/environment preferences, time-zone-aware quiet hours, and periodic digests.
+
+## Choose a deployment
+
+| Platform | What you need | Guide |
+| --- | --- | --- |
+| Cloudflare Workers | Cloudflare account and an admin key | [Deploy to Cloudflare](#deploy-to-cloudflare) |
+| Docker Compose | Docker, an existing S3-compatible bucket, and an HTTPS reverse proxy | [Self-host with Docker](deploy/celld/README.md) |
+| Kubernetes | Image registry, persistent storage, an S3-compatible bucket, and an HTTPS entry point | [Deploy to Kubernetes](deploy/celld/kubernetes/README.md) |
+
+The self-hosted image bundles the existing Worker, dashboard, and Durable Object bindings. Bot tokens and application keys are still managed in the dashboard. The object-store bucket holds the durable state; no PostgreSQL, Redis, or separate queue service is required.
+
+Self-hosted deployments need the documented trusted-proxy configuration for client IPs, HTTPS sessions, and Telegram webhooks. Cloudflare country lookup is unavailable there; keep country restrictions off. See [runtime differences](deploy/celld/README.md#runtime-differences) before choosing a platform. An existing Cloudflare database is not automatically migrated to celld.
 
 ## Deploy to Cloudflare
 
@@ -43,24 +55,24 @@ Paste the generated value into `API_KEY` in `.dev.vars`. Review the Worker name 
 
 ```sh
 npx wrangler login
-npm run deploy -- --secrets-file .dev.vars
+npm run deploy
 ```
 
-The first deployment uploads the code and admin secret together. For later code updates, use `npm run deploy`; Cloudflare retains the existing secret.
+The first deployment uploads the code and admin secret together. The deploy script already reads `.dev.vars`, so `npm run deploy` is enough for subsequent deployments. Keep that local file aligned with the current admin key and out of source control.
 
 ### Where configuration lives
 
 | Setting | Where to configure it |
 | --- | --- |
-| Admin login `API_KEY` | Cloudflare Worker Secret; locally, `.dev.vars` |
+| Admin login `API_KEY` | Cloudflare Worker Secret; for celld, the mounted publishing secret; locally, `.dev.vars` |
 | Bot tokens, webhooks, and enable/disable | Dashboard → select a tenant → Bots |
 | Application API keys | Dashboard → Applications |
 | Tenant quotas | Dashboard → Tenants |
 | IP/country restrictions and delivery settings | Dashboard → Settings |
 
-`API_KEY` is the only required environment secret. Its name is declared in `wrangler.jsonc` under `secrets.required`; the value stays out of source control. `.dev.vars.example` and `package.json` describe the secret for the deploy button.
+`API_KEY` is the only required **application** secret. Its name is declared in `wrangler.jsonc` under `secrets.required`; the value stays out of source control. `.dev.vars.example` and `package.json` describe the secret for the Cloudflare deploy button. Self-hosted deployments also need object-storage configuration and credentials; follow the Docker or Kubernetes guide.
 
-To change the key later, run `npx wrangler secret put API_KEY`, or open **Workers & Pages → your Worker → Settings → Variables and Secrets → Add**, choose **Secret**, enter `API_KEY`, and **Deploy**. Changing the key signs out existing admin sessions.
+On Cloudflare, change the key with `npx wrangler secret put API_KEY`, or open **Workers & Pages → your Worker → Settings → Variables and Secrets → Add**, choose **Secret**, enter `API_KEY`, and **Deploy**. Update your local `.dev.vars` too before using `npm run deploy` again. On celld, update the publishing secret and republish as described in its deployment guide. Changing the key signs out existing admin sessions.
 
 ## Connect your bots
 

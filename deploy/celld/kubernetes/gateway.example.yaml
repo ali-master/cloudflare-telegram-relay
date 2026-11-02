@@ -1,0 +1,136 @@
+# Optional public TLS gateway. Edit the hostname, install relay-celld-tls,
+# and set CELLD_TRUST_FORWARDED_HEADERS="1" in the deployment overlay first.
+# This file is intentionally excluded from the default Kustomization.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-celld-gateway
+data:
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events { worker_connections 1024; }
+    http {
+      access_log /dev/stdout;
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path /tmp/proxy_temp;
+      fastcgi_temp_path /tmp/fastcgi_temp;
+      uwsgi_temp_path /tmp/uwsgi_temp;
+      scgi_temp_path /tmp/scgi_temp;
+      client_max_body_size 1m;
+      ssl_protocols TLSv1.2 TLSv1.3;
+      ssl_certificate /run/tls/tls.crt;
+      ssl_certificate_key /run/tls/tls.key;
+      server {
+        listen 8443 ssl default_server;
+        server_name _;
+        return 444;
+      }
+      server {
+        listen 8443 ssl;
+        server_name relay.example.com;
+        if ($host != relay.example.com) { return 444; }
+        location = /.well-known/celld/health { return 404; }
+        location / {
+          proxy_pass http://relay-celld:8080;
+          proxy_http_version 1.1;
+          proxy_set_header Connection "";
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-Host $host;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Forwarded-For $remote_addr;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header CF-Connecting-IP $remote_addr;
+          proxy_set_header CF-Ray "";
+          proxy_connect_timeout 10s;
+          proxy_read_timeout 60s;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay-celld-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: relay-celld-gateway
+  template:
+    metadata:
+      labels:
+        app: relay-celld-gateway
+        relay-celld-client: "true"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: nginx:1.28.3-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+          command: [nginx]
+          args: [-g, "daemon off;"]
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tls
+              mountPath: /run/tls
+              readOnly: true
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: relay-celld-gateway
+        - name: tls
+          secret:
+            secretName: relay-celld-tls
+            defaultMode: 0440
+        - name: temporary
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-celld-gateway
+spec:
+  type: LoadBalancer
+  # Preserve the remote socket IP when supported by the L4 load balancer.
+  externalTrafficPolicy: Local
+  selector:
+    app: relay-celld-gateway
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
