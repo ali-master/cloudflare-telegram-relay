@@ -57,6 +57,7 @@ export interface Tenant {
   name: string;
   enabled: boolean;
   isDefault: boolean;
+  hasInheritedAccess: boolean;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -101,6 +102,7 @@ export interface TenantRuntime extends Tenant {
   botToken: string;
   webhookSecret: string;
   applicationRevision: string;
+  deletedApplicationIds?: string[];
   applications?: Application[];
 }
 
@@ -110,7 +112,19 @@ export interface TenantCreate {
   limits?: Partial<TenantLimits>
 }
 
+/** A destructive admin operation must target the exact reviewed resource version. */
+export interface ResourceDeletion {
+  expectedVersion: number
+}
+
+/** Access is revoked immediately; durable cleanup may continue after the response. */
+export interface ResourceDeletionResult {
+  deleted: true;
+  cleanupPending: boolean
+}
+
 export interface TenantUpdate {
+  clearInheritedAccess?: true;
   name?: string;
   enabled?: boolean;
   limits?: Partial<TenantLimits>;

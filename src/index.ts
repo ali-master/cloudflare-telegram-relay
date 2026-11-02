@@ -6,11 +6,13 @@ import {
   type Application,
   type ApplicationCreate,
   type ApplicationUpdate,
+  DEFAULT_SETTINGS,
   type Env,
   hubName,
   LEVELS,
   type LoginAuditOutcome,
   type NotificationInput,
+  type ResourceDeletion,
   type SourceContext,
   type SubscriberUpdate,
   type TelegramBotCreate,
@@ -32,6 +34,7 @@ type AppEnv = { Bindings: Env; Variables: { tenant: Tenant; application: Applica
 type C = Context<AppEnv>;
 const app = new Hono<AppEnv>();
 const registry = (c: C) => c.env.TENANTS.getByName('registry');
+const tenantControl = (c: C) => c.env.HUB.getByName(`tenant-control:${c.get('tenant')?.id ?? 'default'}`);
 const tenantHub = (c: C) => c.env.HUB.getByName(hubName(c.get('tenant')?.id ?? 'default'));
 const hub = (c: C) => c.env.HUB.getByName(hubName(c.get('tenant')?.id ?? 'default', c.get('selectedBotId') ?? 'default'));
 
@@ -140,7 +143,7 @@ app.get('/health', c => c.json({status: 'ok', service: 'telegram-relay'}));
 app.post('/api/admin/login', async c => {
   requireConfig(c);
   requireOrigin(c);
-  if (!await hub(c).rateLimit(`login:${sourceContext(c.req.raw).ip}`, 10, 60)) {
+  if (!await c.env.HUB.getByName('admin-auth').rateLimit(`login:${sourceContext(c.req.raw).ip}`, 10, 60)) {
     await auditLogin(c, 'rate_limited');
     c.header('Retry-After', '60');
     return failure(c, 429, 'RATE_LIMITED', 'تلاش‌های ورود زیاد است؛ یک دقیقه صبر کنید.');
@@ -186,6 +189,7 @@ app.post('/api/admin/tenants', async c => {
   return c.json({tenant: result.tenant}, 201);
 });
 app.get('/api/admin/tenants/:tenantId', async c => c.json({tenant: await selectTenant(c)}));
+app.delete('/api/admin/tenants/:tenantId', async c => c.json(await registry(c).deleteTenant(c.req.param('tenantId'), object(await jsonBody(c)) as unknown as ResourceDeletion)));
 app.patch('/api/admin/tenants/:tenantId', async c => c.json({tenant: await registry(c).updateTenant(c.req.param('tenantId'), object(await jsonBody(c)) as TenantUpdate)}));
 app.put('/api/admin/tenants/:tenantId/bot', async c => {
   const data = object(await jsonBody(c));
@@ -195,10 +199,14 @@ app.put('/api/admin/tenants/:tenantId/bot', async c => {
 });
 // Bot management never selects credentials from a client-supplied token or query during delivery.
 const botAdmin = new Hono<AppEnv>();
-botAdmin.use('*', async (c, next) => { await selectTenant(c); await next(); });
+botAdmin.use('*', async (c, next) => {
+  await selectTenant(c);
+  await next();
+});
 botAdmin.get('/', async c => c.json(await registry(c).listBots(c.get('tenant').id, pageNumber(c.req.query('page')), c.req.query('search'))));
 botAdmin.post('/', async c => c.json(await registry(c).createBot(c.get('tenant').id, object(await jsonBody(c)) as unknown as TelegramBotCreate), 201));
 botAdmin.get('/:botId', async c => c.json({bot: await selectBot(c, c.req.param('botId'))}));
+botAdmin.delete('/:botId', async c => c.json(await registry(c).deleteBot(c.get('tenant').id, c.req.param('botId'), object(await jsonBody(c)) as unknown as ResourceDeletion)));
 botAdmin.patch('/:botId', async c => c.json({bot: await registry(c).updateBot(c.get('tenant').id, c.req.param('botId'), object(await jsonBody(c)) as TelegramBotUpdate)}));
 botAdmin.get('/:botId/status', async c => {
   await selectBot(c, c.req.param('botId'));
@@ -206,12 +214,12 @@ botAdmin.get('/:botId/status', async c => {
 });
 botAdmin.post('/:botId/commands', async c => {
   const bot = await selectBot(c, c.req.param('botId'));
-  if (!await tenantHub(c).rateLimit('admin:bot-commands', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  if (!await tenantControl(c).rateLimit('admin:bot-commands', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
   return c.json(await registry(c).registerBotCommands(c.get('tenant').id, bot.id));
 });
 botAdmin.post('/:botId/webhook', async c => {
   const bot = await selectBot(c, c.req.param('botId'), true);
-  if (!await tenantHub(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  if (!await tenantControl(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
   const data = object(await jsonBody(c));
   if (typeof data.url !== 'string' || data.url.length > 2048 || Object.keys(data).some(key => key !== 'url')) {
     throw new AppError(400, 'INVALID_WEBHOOK', 'آدرس عمومی HTTPS وب‌هوک همین بات را وارد کنید.');
@@ -237,8 +245,13 @@ adminData.post('/applications', async c => {
   if (c.req.query('botId') !== undefined && input.botId !== undefined && input.botId !== c.get('selectedBotId')) {
     throw new AppError(400, 'INVALID_APPLICATION', 'بات اپلیکیشن باید با بات انتخاب‌شده یکسان باشد.');
   }
-  return c.json(await registry(c).createApplication(c.get('tenant').id, {...input, botId: input.botId ?? c.get('selectedBotId')} as unknown as ApplicationCreate), 201);
+  return c.json(await registry(c).createApplication(c.get('tenant').id, {
+    ...input,
+    botId: input.botId ?? c.get('selectedBotId')
+  } as unknown as ApplicationCreate), 201);
 });
+adminData.get('/applications/:applicationId', async c => c.json({application: await selectedApplication(c, c.req.param('applicationId'))}));
+adminData.delete('/applications/:applicationId', async c => c.json(await registry(c).deleteApplication(c.get('tenant').id, c.req.param('applicationId'), object(await jsonBody(c)) as unknown as ResourceDeletion, c.req.query('botId') === undefined ? undefined : c.get('selectedBotId'))));
 adminData.patch('/applications/:applicationId', async c => {
   await selectedApplication(c, c.req.param('applicationId'));
   return c.json({application: await registry(c).updateApplication(c.get('tenant').id, c.req.param('applicationId'), object(await jsonBody(c)) as ApplicationUpdate)});
@@ -257,7 +270,7 @@ adminData.post('/subscribers/ban', async c => {
 adminData.get('/context', c => c.json(sourceContext(c.req.raw, 'admin')));
 adminData.get('/overview', async c => c.json(await hub(c).getOverview()));
 adminData.get('/settings', async c => c.json(await hub(c).getSettings()));
-adminData.put('/settings', async c => c.json(await hub(c).updateSettings(settingsInput(await jsonBody(c), await hub(c).getSettings()))));
+adminData.put('/settings', async c => c.json(await registry(c).updateBotSettings(c.get('tenant').id, c.get('selectedBotId'), settingsInput(await jsonBody(c), await hub(c).getSettings()))));
 adminData.get('/automation', async c => c.json(await hub(c).getAutomationPolicy(c.req.query('applicationId') || undefined)));
 adminData.put('/automation', async c => c.json(await hub(c).updateAutomationPolicy(c.req.query('applicationId') || null, object(await jsonBody(c)))));
 adminData.delete('/automation', async c => {
@@ -303,7 +316,7 @@ adminData.get('/notifications/:id', async c => {
   return result ? c.json(result) : failure(c, 404, 'NOT_FOUND', 'اعلان پیدا نشد.');
 });
 adminData.post('/notifications', async c => {
-  if (!await tenantHub(c).rateLimit('admin:send', 30, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  if (!await tenantControl(c).rateLimit('admin:send', 30, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
   const raw = object(await jsonBody(c)), source = sourceContext(c.req.raw, 'admin');
   if (typeof raw.applicationId !== 'string') throw new AppError(400, 'APPLICATION_REQUIRED', 'اپلیکیشن فرستنده را انتخاب کنید.');
   const application = await selectedApplication(c, raw.applicationId);
@@ -324,7 +337,7 @@ adminData.get('/usage', async c => c.json({
   limits: c.get('tenant').limits
 }));
 adminData.post('/webhook', async c => {
-  if (!await tenantHub(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
+  if (!await tenantControl(c).rateLimit('admin:webhook', 5, 60)) return failure(c, 429, 'RATE_LIMITED', 'تعداد درخواست زیاد است.');
   const origin = new URL(c.req.url).origin;
   if (!origin.startsWith('https://')) throw new AppError(400, 'HTTPS_REQUIRED', 'وب‌هوک تلگرام به آدرس عمومی HTTPS نیاز دارد.');
   const id = c.get('tenant').id;
@@ -349,11 +362,17 @@ ingest.use('*', async (c, next) => {
   await initializeHub(c);
   const source = sourceContext(c.req.raw);
   if (c.get('selectedBotId') !== 'default') {
-    await tenantHub(c).initializeTenant(tenant.id, tenant.name);
-    checkAccess(await tenantHub(c).getSettings(), source);
+    const defaultBot = await registry(c).getBot(tenant.id, 'default');
+    if (defaultBot) {
+      await tenantHub(c).initializeTenant(tenant.id, tenant.name);
+      checkAccess(await tenantHub(c).getSettings(), source);
+    } else {
+      const inherited = await registry(c).getInheritedAccess(tenant.id);
+      if (inherited) checkAccess({...DEFAULT_SETTINGS, ...inherited}, source);
+    }
   }
   checkAccess(await hub(c).getSettings(), source);
-  if (!await tenantHub(c).rateLimit('ingest:tenant', tenant.limits.requestsPerMinute, 60)) {
+  if (!await tenantControl(c).rateLimit('ingest:tenant', tenant.limits.requestsPerMinute, 60)) {
     c.header('Retry-After', '60');
     return failure(c, 429, 'RATE_LIMITED', 'سقف درخواست این Tenant در دقیقه پر شده است.');
   }
@@ -422,9 +441,37 @@ app.get('/', c => dashboardAsset(c.req.raw, c.env.ASSETS));
 app.get('/index.html', c => dashboardAsset(c.req.raw, c.env.ASSETS));
 app.get('*', c => c.env.ASSETS.fetch(c.req.raw));
 app.notFound(c => failure(c, 404, 'NOT_FOUND', 'مسیر پیدا نشد.'));
-app.onError((error, c) => {
+app.onError(async (error, c) => {
   if (error instanceof AppError) return failure(c, error.status, error.code, error.message);
+  if (error.message.startsWith('BOT_ALREADY_ASSIGNED:') && c.req.path.startsWith('/api/admin/') && await isAdmin(c)) {
+    try {
+      const value: unknown = JSON.parse(error.message.slice('BOT_ALREADY_ASSIGNED:'.length).trim());
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const owner = value as Record<string, unknown>;
+        if (['tenantId', 'tenantName', 'botId', 'botName'].every(key => typeof owner[key] === 'string' && (owner[key] as string).length > 0 && (owner[key] as string).length <= 80)) {
+          const safe = {
+            tenantId: owner.tenantId,
+            tenantName: owner.tenantName,
+            botId: owner.botId,
+            botName: owner.botName
+          };
+          return c.json({
+            error: {
+              code: 'BOT_ALREADY_ASSIGNED',
+              message: `این بات قبلاً در فضای «${safe.tenantName}» (${safe.tenantId}) با نام «${safe.botName}» ثبت شده است.`,
+              owner: safe
+            }
+          }, 409);
+        }
+      }
+    } catch { /* Fall through to a generic conflict without exposing RPC details. */
+    }
+  }
   const rpcErrors: Record<string, [number, string]> = {
+    INVALID_DELETION: [400, 'برای حذف، نسخهٔ فعلی منبع را با expectedVersion ارسال کنید.'],
+    DEFAULT_RESOURCE_PROTECTED: [409, 'فضای پیش‌فرض سیستم قابل حذف نیست؛ می‌توانید بات‌ها و اپلیکیشن‌های آن را حذف کنید.'],
+    RESOURCE_ID_RETIRED: [409, 'این شناسه قبلاً حذف شده است؛ برای جلوگیری از بازیابی داده‌های قدیمی، شناسهٔ تازه‌ای انتخاب کنید.'],
+    RESOURCE_DELETED: [404, 'این منبع حذف شده است و دیگر قابل استفاده نیست.'],
     IDEMPOTENCY_CONFLICT: [409, 'این کلید قبلاً برای اعلان متفاوت استفاده شده است.'],
     TENANT_NOT_FOUND: [404, 'Tenant پیدا نشد.'],
     TENANT_EXISTS: [409, 'این شناسه Tenant قبلاً ثبت شده است.'],

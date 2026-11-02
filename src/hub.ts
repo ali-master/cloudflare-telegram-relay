@@ -15,7 +15,14 @@ import type {
 } from './types';
 import {AppError, DEFAULT_SETTINGS, LEVELS} from './types';
 import {HubAutomation, type IncidentStored} from './hub-automation';
-import {DEFAULT_SUBSCRIBER_PREFERENCES, automationPolicyInput, evaluateDelivery, type Incident, type SubscriberPreferences} from './automation';
+import {HubLifecycle} from './hub-lifecycle';
+import {
+  automationPolicyInput,
+  DEFAULT_SUBSCRIBER_PREFERENCES,
+  evaluateDelivery,
+  type Incident,
+  type SubscriberPreferences
+} from './automation';
 import {formatRichDigest} from './rich-message';
 import {formatNotification, formatRichNotification, telegramCall, TelegramError} from './telegram';
 import {LEGACY_WELCOME_MESSAGE, subscriptionMenu} from './subscription-menu';
@@ -24,14 +31,19 @@ import {parseNotificationHtml} from './notification-html';
 
 type Row = Record<string, SqlStorageValue>;
 type DirectoryApplication = Pick<Application, 'id' | 'name'>;
-type PrivateCallback = {id: string; data: string; from: {id: number}; message: {message_id: number; chat: {id: number; type: 'private'}}};
+type PrivateCallback = {
+  id: string;
+  data: string;
+  from: { id: number };
+  message: { message_id: number; chat: { id: number; type: 'private' } }
+};
 
 function privateCallback(value: unknown): PrivateCallback | null {
   if (!value || typeof value !== 'object') return null;
   const callback = value as Partial<PrivateCallback>;
   return callback.message?.chat?.type === 'private' && Number.isSafeInteger(callback.message.chat.id) &&
-    callback.from?.id === callback.message.chat.id && Number.isSafeInteger(callback.message.message_id) && callback.message.message_id > 0 &&
-    typeof callback.id === 'string' && callback.id.length <= 256 && typeof callback.data === 'string'
+  callback.from?.id === callback.message.chat.id && Number.isSafeInteger(callback.message.message_id) && callback.message.message_id > 0 &&
+  typeof callback.id === 'string' && callback.id.length <= 256 && typeof callback.data === 'string'
     ? callback as PrivateCallback : null;
 }
 
@@ -82,6 +94,7 @@ function stableJSON(value: unknown): string {
 export class NotificationHub extends DurableObject<Env> {
   private readonly sql: SqlStorage;
   private automation!: HubAutomation;
+  private readonly lifecycle: HubLifecycle;
   private settings: Settings = structuredClone(DEFAULT_SETTINGS);
   private tenantId: string | null = null;
   private selectedBotId = 'default';
@@ -99,7 +112,12 @@ export class NotificationHub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.lifecycle = new HubLifecycle(ctx.storage);
     ctx.blockConcurrencyWhile(async () => {
+      if (this.lifecycle.deleted) {
+        await ctx.storage.deleteAlarm();
+        return;
+      }
       const legacyDatabase = this.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'settings'").length > 0;
       this.sql.exec(`
           CREATE TABLE IF NOT EXISTS settings
@@ -308,13 +326,50 @@ export class NotificationHub extends DurableObject<Env> {
                          application_id
                      )
           )`);
-      this.sql.exec(`CREATE TABLE IF NOT EXISTS application_access (
-        application_id TEXT PRIMARY KEY, version INTEGER NOT NULL, enabled INTEGER NOT NULL,
-        audience_mode TEXT NOT NULL, show_in_directory INTEGER NOT NULL, name TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS application_audience (
-        application_id TEXT NOT NULL, chat_id TEXT NOT NULL, PRIMARY KEY(application_id, chat_id)
-      )`);
+      this.sql.exec(`CREATE TABLE IF NOT EXISTS application_access
+                     (
+                         application_id
+                         TEXT
+                         PRIMARY
+                         KEY,
+                         version
+                         INTEGER
+                         NOT
+                         NULL,
+                         enabled
+                         INTEGER
+                         NOT
+                         NULL,
+                         audience_mode
+                         TEXT
+                         NOT
+                         NULL,
+                         show_in_directory
+                         INTEGER
+                         NOT
+                         NULL,
+                         name
+                         TEXT
+                         NOT
+                         NULL
+                     );
+      CREATE TABLE IF NOT EXISTS application_audience
+      (
+          application_id
+          TEXT
+          NOT
+          NULL,
+          chat_id
+          TEXT
+          NOT
+          NULL,
+          PRIMARY
+          KEY
+      (
+          application_id,
+          chat_id
+      )
+          )`);
       for (const app of this.rows('SELECT application_id, version FROM application_access')) this.applicationVersions.set(String(app.application_id), Number(app.version));
       this.applicationRevision = [...this.applicationVersions].map(([id, version]) => `${id}:${version}`).sort().join(',');
       this.applicationDirectoryVersion = Number(this.rows("SELECT value FROM queue_state WHERE key = 'application_directory_version'")[0]?.value ?? 0);
@@ -344,7 +399,11 @@ export class NotificationHub extends DurableObject<Env> {
         this.sql.exec('UPDATE settings SET body = ? WHERE id = 1', JSON.stringify(this.settings));
       }
       const welcomeMenu = subscriptionMenu(DEFAULT_SETTINGS.welcomeMessage, true);
-      this.sql.exec("UPDATE deliveries SET rendered=?, system_payload=? WHERE notification_id IS NULL AND system_payload IS NULL AND status='pending' AND rendered=?", welcomeMenu.text, JSON.stringify({method: 'sendMessage', subscription_menu: 'active', reply_markup: welcomeMenu.reply_markup}), LEGACY_WELCOME_MESSAGE);
+      this.sql.exec("UPDATE deliveries SET rendered=?, system_payload=? WHERE notification_id IS NULL AND system_payload IS NULL AND status='pending' AND rendered=?", welcomeMenu.text, JSON.stringify({
+        method: 'sendMessage',
+        subscription_menu: 'active',
+        reply_markup: welcomeMenu.reply_markup
+      }), LEGACY_WELCOME_MESSAGE);
       this.lastCleanupAt = Number(this.rows("SELECT value FROM queue_state WHERE key = 'last_cleanup_at'")[0]?.value ?? -Infinity);
       const today = new Date(Date.now()).toISOString().slice(0, 10);
       this.sql.exec('INSERT OR IGNORE INTO daily_usage (day, notifications) SELECT ?, COUNT(*) FROM notifications WHERE created_at >= ?', today, Date.parse(`${today}T00:00:00.000Z`));
@@ -395,10 +454,16 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   /** Reserve tenant-wide capacity before growing this bot's durable state. */
-  private async withQuota<T>(requested: (runtime: TenantRuntime) => {notifications: number; subscribers: number; pending: number}, action: () => Promise<T>, requireEnabled = false): Promise<T> {
+  private async withQuota<T>(requested: (runtime: TenantRuntime) => {
+    notifications: number;
+    subscribers: number;
+    pending: number
+  }, action: () => Promise<T>, requireEnabled = false): Promise<T> {
     const previous = this.quotaTail;
     let unlock!: () => void;
-    this.quotaTail = new Promise<void>(resolve => { unlock = resolve; });
+    this.quotaTail = new Promise<void>(resolve => {
+      unlock = resolve;
+    });
     await previous;
     let reserved = false;
     try {
@@ -410,20 +475,76 @@ export class NotificationHub extends DurableObject<Env> {
       this.quotaPendingCeiling = reservation.maxPendingDeliveries;
       this.maxPendingDeliveries = reservation.maxPendingDeliveries;
       reserved = true;
+      this.lifecycle.assertActive();
       return await action();
     } finally {
       this.quotaPendingCeiling = null;
-      if (reserved) {
+      if (reserved && !this.lifecycle.deleted) {
         // Reports only release held capacity. A failed report leaves conservative
         // reservations in the registry until this hub reconciles on its next call.
-        try { await this.env.TENANTS.getByName('registry').reportQuotaUsage(this.tenantId!, this.selectedBotId, this.nextQuotaRevision(), this.readUsage()); }
-        catch { /* Preserve the already committed operation's result. */ }
+        try {
+          await this.env.TENANTS.getByName('registry').reportQuotaUsage(this.tenantId!, this.selectedBotId, this.nextQuotaRevision(), this.readUsage());
+        } catch { /* Preserve the already committed operation's result. */
+        }
       }
       unlock();
     }
   }
 
+  /** Stop this bot permanently and erase one bounded page; the registry retries until complete. */
+  async decommission(): Promise<boolean> {
+    this.lifecycle.retire();
+    this.wakeEpoch++;
+    this.invalidate();
+    this.rateCounters.clear();
+    this.applicationVersions.clear();
+    this.applicationRevision = '';
+    await this.ctx.storage.deleteAlarm();
+    const complete = this.lifecycle.purgeBot();
+    await this.ctx.storage.sync();
+    return complete;
+  }
+
+  /** Fence an application's old snapshots and pending sends as soon as deletion is observed. */
+  private retireApplication(id: string): void {
+    if (!this.lifecycle.retireApplication(id)) return;
+    this.applicationVersions.delete(id);
+    this.applicationRevision = [...this.applicationVersions].map(([key, version]) => `${key}:${version}`).sort().join(',');
+    this.wakeEpoch++;
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec('UPDATE application_access SET enabled=0, show_in_directory=0 WHERE application_id=?', id);
+      this.sql.exec(`UPDATE deliveries
+                     SET status='skipped',
+                         error='Application was deleted.',
+                         updated_at=?
+                     WHERE status = 'pending'
+                       AND (notification_id IN
+                            (SELECT id FROM notifications WHERE json_extract(input,'$.applicationId') = ?)
+                         OR incident_id IN (SELECT id FROM incidents WHERE application_id = ?)
+                         OR json_extract(system_payload,'$.escalationIncident') IN (SELECT id FROM incidents WHERE application_id = ?) OR
+                            (notification_id IS NULL AND json_type(system_payload,'$.directory_version') IS NOT NULL))`, Date.now(), id, id, id);
+      this.sql.exec('UPDATE incidents SET deadline=NULL WHERE application_id=?', id);
+      this.sql.exec("INSERT INTO queue_state(key,value) VALUES('application_directory_version',1) ON CONFLICT(key) DO UPDATE SET value=value+1");
+    });
+    this.applicationDirectoryVersion++;
+    this.automation.clearCache();
+    this.invalidate();
+  }
+
+  /** Remove application-owned data without touching other applications or subscriber profiles. */
+  async removeApplication(id: string): Promise<boolean> {
+    if (this.lifecycle.deleted) return true;
+    if (!/^[a-z0-9][a-z0-9_-]{1,47}$/.test(id)) throw new AppError(400, 'INVALID_APPLICATION', 'INVALID_APPLICATION: Invalid application identity.');
+    this.retireApplication(id);
+    const complete = this.lifecycle.purgeApplication(id);
+    this.automation.clearCache();
+    this.invalidate();
+    await this.ctx.storage.sync();
+    return complete;
+  }
+
   async initializeTenant(id: string, name?: string, botId = 'default'): Promise<void> {
+    this.lifecycle.assertActive();
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) throw new AppError(400, 'TENANT_DISABLED', 'TENANT_DISABLED: Invalid tenant identity.');
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(botId)) throw new AppError(400, 'BOT_NOT_FOUND', 'BOT_NOT_FOUND: Invalid bot identity.');
     if (this.tenantId !== null) {
@@ -445,24 +566,32 @@ export class NotificationHub extends DurableObject<Env> {
 
   async wake(): Promise<void> {
     // Registry mutations call this method; it must never call back into the registry.
+    if (this.lifecycle.deleted) return;
     this.wakeEpoch++;
     await this.ensureAlarm(Date.now() + 100);
   }
 
   private async runtime(): Promise<TenantRuntime> {
+    this.lifecycle.assertActive();
     if (!this.tenantId || !this.env.TENANTS) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: Tenant is unavailable.');
     const knownRevision = this.applicationRevision;
     const runtime = await this.env.TENANTS.getByName('registry').getRuntime(this.tenantId, knownRevision, this.selectedBotId);
+    this.lifecycle.assertActive();
     if (!runtime || runtime.id !== this.tenantId) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: Tenant is unavailable.');
     if (runtime.selectedBotId !== undefined && runtime.selectedBotId !== this.selectedBotId) throw new AppError(403, 'BOT_NOT_FOUND', 'BOT_NOT_FOUND: Bot scope is unavailable.');
+    for (const id of runtime.deletedApplicationIds ?? []) this.retireApplication(id);
     if (runtime.applications) this.refreshApplicationAccess(runtime.applications);
     else if (runtime.applicationRevision !== knownRevision) throw new AppError(503, 'TENANT_DISABLED', 'TENANT_DISABLED: Application policy snapshot is unavailable.');
-    runtime.limits = {...runtime.limits, maxPendingDeliveries: Math.min(runtime.limits.maxPendingDeliveries, this.quotaPendingCeiling ?? Infinity)};
+    runtime.limits = {
+      ...runtime.limits,
+      maxPendingDeliveries: Math.min(runtime.limits.maxPendingDeliveries, this.quotaPendingCeiling ?? Infinity)
+    };
     this.maxPendingDeliveries = runtime.limits.maxPendingDeliveries;
     return runtime;
   }
 
   validateApplicationAudience(chatIds: string[]): void {
+    this.lifecycle.assertActive();
     if (!Array.isArray(chatIds) || chatIds.length > 1_000 || chatIds.some((id) => typeof id !== 'string' || !/^-?\d{1,20}$/.test(id)) || new Set(chatIds).size !== chatIds.length) {
       throw new AppError(400, 'INVALID_APPLICATION', 'INVALID_APPLICATION: Invalid application audience.');
     }
@@ -473,10 +602,11 @@ export class NotificationHub extends DurableObject<Env> {
 
   /** Registry calls this directly while mutating applications: never call back into the registry. */
   refreshApplicationAccess(applications: Application[]): void {
+    if (this.lifecycle.deleted) return;
     const changed: Application[] = [];
     this.ctx.storage.transactionSync(() => {
       for (const app of applications) {
-        if ((app.botId ?? 'default') !== this.selectedBotId) continue;
+        if ((app.botId ?? 'default') !== this.selectedBotId || this.lifecycle.applicationDeleted(app.id)) continue;
         const version = this.applicationVersions.get(app.id);
         if (typeof version === 'number' && version >= app.version) continue;
         this.sql.exec(`INSERT INTO application_access (application_id, version, enabled, audience_mode,
@@ -520,6 +650,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   getUsage(): TenantUsage {
+    this.lifecycle.assertActive();
     const day = new Date(Date.now()).toISOString().slice(0, 10);
     return this.cached(`usage:${day}`, () => this.readUsage());
   }
@@ -536,10 +667,12 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   getSettings(): Settings {
+    this.lifecycle.assertActive();
     return structuredClone(this.settings);
   }
 
   async setSubscriberBan(chatIds: string[], banned: boolean, reason?: string): Promise<{ updated: number }> {
+    this.lifecycle.assertActive();
     if (!Array.isArray(chatIds) || chatIds.length < 1 || chatIds.length > 100 || chatIds.some((id) => typeof id !== 'string' || !/^-?\d{1,20}$/.test(id)) || typeof banned !== 'boolean') {
       throw new AppError(400, 'INVALID_BAN', 'Select between 1 and 100 valid subscriber IDs.');
     }
@@ -557,15 +690,20 @@ export class NotificationHub extends DurableObject<Env> {
     });
     this.invalidate();
     // Revocation is immediate; the quota reconciliation only releases capacity.
-    try { await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined); }
-    catch { await this.ensureAlarm(Date.now()+100); }
+    try {
+      await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined);
+    } catch {
+      await this.ensureAlarm(Date.now() + 100);
+    }
     return {updated};
   }
 
   async updateSettings(settings: Settings): Promise<Settings> {
+    this.lifecycle.assertActive();
     await this.ctx.storage.transaction(async () => {
       // The settings and their wakeup commit together, including after an isolate crash.
       if (!settings.paused) await this.ensureAlarm(Date.now() + 100);
+      this.lifecycle.assertActive();
       this.sql.exec('UPDATE settings SET body = ? WHERE id = 1', JSON.stringify(settings));
       this.settings = structuredClone(settings);
       this.invalidate();
@@ -574,6 +712,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   rateLimit(key: string, limit: number, windowSeconds: number): boolean {
+    this.lifecycle.assertActive();
     const now = Date.now();
     let counter = this.rateCounters.get(key);
     if (!counter) {
@@ -598,10 +737,17 @@ export class NotificationHub extends DurableObject<Env> {
     this.rateCounters.set(key, counter);
   }
 
-  async enqueue(input: NotificationInput, source: SourceContext, idempotencyKey?: string, requestFingerprint?: string): Promise<{notification: NotificationRecord; duplicate: boolean}> {
+  async enqueue(input: NotificationInput, source: SourceContext, idempotencyKey?: string, requestFingerprint?: string): Promise<{
+    notification: NotificationRecord;
+    duplicate: boolean
+  }> {
     return this.withQuota(() => {
       const duplicate = idempotencyKey && this.rows('SELECT id FROM notifications WHERE idempotency_key = ? AND purging = 0', idempotencyKey).length > 0;
-      return {notifications: duplicate ? 0 : 1, subscribers: 0, pending: duplicate ? 0 : this.count('SELECT COUNT(*) AS count FROM subscribers WHERE active = 1 AND banned = 0') + this.pendingIncidentExpansion()};
+      return {
+        notifications: duplicate ? 0 : 1,
+        subscribers: 0,
+        pending: duplicate ? 0 : this.count('SELECT COUNT(*) AS count FROM subscribers WHERE active = 1 AND banned = 0') + this.pendingIncidentExpansion()
+      };
     }, () => this.enqueueReserved(input, source, idempotencyKey, requestFingerprint), true);
   }
 
@@ -619,6 +765,8 @@ export class NotificationHub extends DurableObject<Env> {
     const outcome = await this.ctx.storage.transaction(async () => {
       // Alarm and fan-out commit atomically, so an accepted job always has a wakeup.
       await this.ensureAlarm(Date.now() + 100);
+      this.lifecycle.assertActive();
+      if (input.applicationId) this.assertAutomationApplication(input.applicationId);
       if (idempotencyKey) {
         const existing = this.rows<NotificationRow>('SELECT * FROM notifications WHERE idempotency_key = ? AND purging = 0', idempotencyKey)[0];
         if (existing) {
@@ -639,23 +787,48 @@ export class NotificationHub extends DurableObject<Env> {
                                      FROM subscribers s CROSS JOIN request r
                                      WHERE ${this.recipientWhere('r.app_id')}`, input.applicationId ?? null);
       const existingIncident = this.automation.findOpen(input, now);
-      const additional = existingIncident ? this.count(`WITH request AS (SELECT ? AS app_id) SELECT COUNT(*) AS count FROM deliveries d JOIN subscribers s ON s.chat_id = d.chat_id CROSS JOIN request r WHERE ${input.incidentStatus === 'resolved' ? "d.incident_id IN (SELECT id FROM incidents WHERE application_id IS ? AND fingerprint = ? AND status != 'resolved')" : 'd.incident_id = ?'} AND d.status NOT IN ('pending','sending') AND NOT (d.status='unknown' AND d.telegram_message_id IS NULL) AND ${this.recipientWhere('r.app_id')}`, input.applicationId ?? null, ...(input.incidentStatus === 'resolved' ? [input.applicationId ?? null, existingIncident.fingerprint] : [existingIncident.id])) : recipients;
+      const additional = existingIncident ? this.count(`WITH request AS (SELECT ? AS app_id)
+                                                        SELECT COUNT(*) AS count
+                                                        FROM deliveries d JOIN subscribers s
+                                                        ON s.chat_id = d.chat_id CROSS JOIN request r
+                                                        WHERE ${input.incidentStatus === 'resolved' ? "d.incident_id IN (SELECT id FROM incidents WHERE application_id IS ? AND fingerprint = ? AND status != 'resolved')" : 'd.incident_id = ?'}
+                                                          AND d.status NOT IN ('pending'
+                                                            , 'sending')
+                                                          AND NOT (d.status='unknown'
+                                                          AND d.telegram_message_id IS NULL)
+                                                          AND ${this.recipientWhere('r.app_id')}`, input.applicationId ?? null, ...(input.incidentStatus === 'resolved' ? [input.applicationId ?? null, existingIncident.fingerprint] : [existingIncident.id])) : recipients;
       const pending = this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending', 'sending')");
       if (pending + additional > runtime.limits.maxPendingDeliveries) return {error: new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is not enough capacity for this notification in the delivery queue.')};
       this.sql.exec('INSERT INTO daily_usage (day, notifications) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET notifications = notifications + 1', day);
       this.sql.exec('INSERT INTO notifications (id, input, source, created_at, idempotency_key, fingerprint) VALUES (?, ?, ?, ?, ?, ?)', id, JSON.stringify(input), JSON.stringify(source), now, idempotencyKey ?? null, fingerprint);
       const tracked = this.automation.accept(input, source, id, now);
-      const richPayload = JSON.stringify({method: 'sendRichMessage', rich_message: formatRichNotification(input, source, settings.showCountryFlag, id, tracked?.incident)});
+      const richPayload = JSON.stringify({
+        method: 'sendRichMessage',
+        rich_message: formatRichNotification(input, source, settings.showCountryFlag, id, tracked?.incident)
+      });
       if (tracked?.repeated) {
         this.refreshIncidentDeliveries(tracked.incident, now, input.incidentStatus === 'resolved');
       } else {
         // Initial fan-out captures eligible users atomically; preferences can only reduce this set later.
         this.sql.exec(`WITH request AS (SELECT ? AS app_id)
-          INSERT INTO deliveries (notification_id, chat_id, rendered, image, silent, updated_at, system_payload, incident_id)
-          SELECT ?, chat_id, ?, ?, ?, ?, ?, ? FROM subscribers s CROSS JOIN request r WHERE ${this.recipientWhere('r.app_id')}`,
+                       INSERT
+                       INTO deliveries (notification_id, chat_id, rendered, image, silent, updated_at, system_payload, incident_id)
+        SELECT ?,
+               chat_id,
+               ?,
+               ?,
+               ?,
+               ?,
+               ?,
+               ?
+        FROM subscribers s
+                 CROSS JOIN request r
+        WHERE ${this.recipientWhere('r.app_id')}`,
           input.applicationId ?? null, id, rendered, input.image ?? null, input.silent ? 1 : 0, now, richPayload, tracked?.incident.id ?? null);
         if (this.automation.getPolicy(input.applicationId).policy.rules.length || this.count('SELECT COUNT(*) AS count FROM subscriber_preferences')) {
-          for (const delivery of this.rows<DeliveryRow>(`SELECT d.* FROM deliveries d WHERE notification_id = ?${this.automation.getPolicy(input.applicationId).policy.rules.length ? '' : ' AND EXISTS (SELECT 1 FROM subscriber_preferences p WHERE p.chat_id = d.chat_id)'}`, id)) this.applyDeliveryPreferences(delivery, input, now);
+          for (const delivery of this.rows<DeliveryRow>(`SELECT d.*
+                                                         FROM deliveries d
+                                                         WHERE notification_id = ?${this.automation.getPolicy(input.applicationId).policy.rules.length ? '' : ' AND EXISTS (SELECT 1 FROM subscriber_preferences p WHERE p.chat_id = d.chat_id)'}`, id)) this.applyDeliveryPreferences(delivery, input, now);
         }
       }
       this.invalidate();
@@ -702,6 +875,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   listNotifications(page: number, level?: string, search?: string, applicationId?: string): Page<NotificationRecord> {
+    this.lifecycle.assertActive();
     return this.cached(`notifications:${JSON.stringify([page, level, search, applicationId])}`, () => this.readNotifications(page, level, search, applicationId));
   }
 
@@ -736,6 +910,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   getNotification(id: string) {
+    this.lifecycle.assertActive();
     return this.cached(`notification:${id}`, () => this.readNotification(id));
   }
 
@@ -768,6 +943,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   listSubscribers(page: number, search = ''): Page<Subscriber> {
+    this.lifecycle.assertActive();
     if (typeof search !== 'string' || search.trim().length > 100) throw new AppError(400, 'INVALID_SUBSCRIBER', 'INVALID_SUBSCRIBER: Search must contain at most 100 characters.');
     page = Math.max(1, Math.floor(page || 1));
     search = search.trim();
@@ -775,13 +951,18 @@ export class NotificationHub extends DurableObject<Env> {
       const where = search ? ' WHERE instr(lower(first_name), lower(?)) > 0 OR instr(lower(display_name), lower(?)) > 0 OR instr(lower(username), lower(?)) > 0 OR instr(chat_id, ?) > 0' : '';
       const bindings = search ? [search, search, search, search] : [];
       return {
-        items: this.toSubscribers(this.rows(`SELECT * FROM subscribers${where} ORDER BY joined_at DESC, chat_id LIMIT ? OFFSET ?`, ...bindings, PAGE_SIZE, (page - 1) * PAGE_SIZE)),
-        total: this.count(`SELECT COUNT(*) AS count FROM subscribers${where}`, ...bindings), page, pageSize: PAGE_SIZE,
+        items: this.toSubscribers(this.rows(`SELECT *
+                                             FROM subscribers${where}
+                                             ORDER BY joined_at DESC, chat_id LIMIT ?
+                                             OFFSET ?`, ...bindings, PAGE_SIZE, (page - 1) * PAGE_SIZE)),
+        total: this.count(`SELECT COUNT(*) AS count
+                           FROM subscribers ${where}`, ...bindings), page, pageSize: PAGE_SIZE,
       };
     });
   }
 
   getSubscriber(chatId: string): Subscriber | null {
+    this.lifecycle.assertActive();
     this.validateSubscriberId(chatId);
     return this.cached(`subscriber:${chatId}`, () => this.toSubscribers(this.rows('SELECT * FROM subscribers WHERE chat_id = ?', chatId))[0] ?? null);
   }
@@ -797,7 +978,10 @@ export class NotificationHub extends DurableObject<Env> {
     const placeholders = ids.map(() => '?').join(',');
     const relations = (table: string): Map<string, string[]> => {
       const result = new Map<string, string[]>();
-      for (const row of this.rows(`SELECT chat_id, application_id FROM ${table} WHERE chat_id IN (${placeholders}) ORDER BY application_id`, ...ids)) {
+      for (const row of this.rows(`SELECT chat_id, application_id
+                                   FROM ${table}
+                                   WHERE chat_id IN (${placeholders})
+                                   ORDER BY application_id`, ...ids)) {
         const chatId = String(row.chat_id);
         const values = result.get(chatId) ?? [];
         values.push(String(row.application_id));
@@ -827,6 +1011,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   async updateSubscriber(chatId: string, patch: SubscriberUpdate): Promise<Subscriber> {
+    this.lifecycle.assertActive();
     this.validateSubscriberId(chatId);
     const invalid = (): never => {
       throw new AppError(400, 'INVALID_SUBSCRIBER', 'INVALID_SUBSCRIBER: Invalid subscriber profile or application access policy.');
@@ -871,7 +1056,9 @@ export class NotificationHub extends DurableObject<Env> {
         this.sql.exec('DELETE FROM subscriber_allowed_applications WHERE chat_id = ?', chatId);
         for (const id of patch.allowedApplicationIds!) this.sql.exec('INSERT INTO subscriber_allowed_applications (chat_id, application_id) VALUES (?, ?)', chatId, id);
       }
-      this.sql.exec(`UPDATE subscribers SET ${columns.join(', ')} WHERE chat_id = ?`, ...bindings, chatId);
+      this.sql.exec(`UPDATE subscribers
+                     SET ${columns.join(', ')}
+                     WHERE chat_id = ?`, ...bindings, chatId);
       if (policyChanged) {
         this.sql.exec(`UPDATE deliveries
                        SET status     = 'skipped',
@@ -892,13 +1079,17 @@ export class NotificationHub extends DurableObject<Env> {
     });
     this.invalidate();
     if (policyChanged) {
-      try { await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined); }
-      catch { await this.ensureAlarm(Date.now()+100); }
+      try {
+        await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined);
+      } catch {
+        await this.ensureAlarm(Date.now() + 100);
+      }
     }
     return this.getSubscriber(chatId)!;
   }
 
   getOverview(): Overview {
+    this.lifecycle.assertActive();
     return this.cached(`overview:${new Date(Date.now()).toISOString().slice(0, 10)}`, () => this.readOverview());
   }
 
@@ -948,15 +1139,20 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   async getAutomationPolicy(applicationId?: string) {
-    if (applicationId) { await this.runtime(); this.assertAutomationApplication(applicationId); }
+    this.lifecycle.assertActive();
+    if (applicationId) {
+      await this.runtime();
+      this.assertAutomationApplication(applicationId);
+    }
     return this.cached(`automation:${applicationId ?? ''}`, () => this.automation.getPolicy(applicationId));
   }
 
   private assertAutomationApplication(applicationId: string): void {
-    if (typeof applicationId !== 'string' || !this.applicationVersions.has(applicationId)) throw new AppError(404, 'APPLICATION_NOT_FOUND', 'APPLICATION_NOT_FOUND: Application does not exist.');
+    if (typeof applicationId !== 'string' || this.lifecycle.applicationDeleted(applicationId) || !this.applicationVersions.has(applicationId)) throw new AppError(404, 'APPLICATION_NOT_FOUND', 'APPLICATION_NOT_FOUND: Application does not exist.');
   }
 
   async updateAutomationPolicy(applicationId: string | null, raw: unknown) {
+    this.lifecycle.assertActive();
     await this.runtime();
     if (applicationId !== null) this.assertAutomationApplication(applicationId);
     const result = this.ctx.storage.transactionSync(() => {
@@ -970,66 +1166,106 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   async resetAutomationPolicy(applicationId: string, expectedVersion: number) {
-    await this.runtime(); this.assertAutomationApplication(applicationId);
+    this.lifecycle.assertActive();
+    await this.runtime();
+    this.assertAutomationApplication(applicationId);
     const result = this.ctx.storage.transactionSync(() => this.automation.resetPolicy(applicationId, expectedVersion));
     this.reschedulePreferenceDeliveries(applicationId);
-    await this.wake(); return result;
+    await this.wake();
+    return result;
   }
 
   getSubscriberPreferences(chatId: string): SubscriberPreferences {
+    this.lifecycle.assertActive();
     this.validateSubscriberId(chatId);
     return this.cached(`preferences:${chatId}`, () => this.automation.getPreferences(chatId));
   }
 
   async updateSubscriberPreferences(chatId: string, raw: unknown): Promise<SubscriberPreferences> {
+    this.lifecycle.assertActive();
     this.validateSubscriberId(chatId);
     const result = this.ctx.storage.transactionSync(() => this.automation.updatePreferences(chatId, raw));
     this.rescheduleSubscriberPreferences(chatId);
-    await this.wake(); return result;
+    await this.wake();
+    return result;
   }
 
   listIncidents(page: number, status?: string, applicationId?: string) {
-    return this.cached(`incidents:${JSON.stringify([page,status,applicationId])}`, () => this.automation.listIncidents(page,status,applicationId));
+    this.lifecycle.assertActive();
+    return this.cached(`incidents:${JSON.stringify([page, status, applicationId])}`, () => this.automation.listIncidents(page, status, applicationId));
   }
 
-  getIncident(id: string) { return this.cached(`incident:${id}`, () => this.automation.getIncident(id)); }
-  getIncidentOverview() { return this.cached('incident-overview', () => this.automation.overview()); }
-
-  async actOnIncident(id: string, raw: unknown, actorChatId?: string): Promise<{incident: Incident}> {
-    return this.withQuota(() => ({notifications: 0, subscribers: 0, pending: this.pendingIncidentExpansion()}), () => this.actOnIncidentReserved(id, raw, actorChatId), true);
+  getIncident(id: string) {
+    this.lifecycle.assertActive();
+    return this.cached(`incident:${id}`, () => this.automation.getIncident(id));
   }
 
-  private async actOnIncidentReserved(id: string, raw: unknown, actorChatId?: string): Promise<{incident: Incident}> {
+  getIncidentOverview() {
+    this.lifecycle.assertActive();
+    return this.cached('incident-overview', () => this.automation.overview());
+  }
+
+  async actOnIncident(id: string, raw: unknown, actorChatId?: string): Promise<{ incident: Incident }> {
+    return this.withQuota(() => ({
+      notifications: 0,
+      subscribers: 0,
+      pending: this.pendingIncidentExpansion()
+    }), () => this.actOnIncidentReserved(id, raw, actorChatId), true);
+  }
+
+  private async actOnIncidentReserved(id: string, raw: unknown, actorChatId?: string): Promise<{ incident: Incident }> {
     const runtime = await this.runtime();
     if (!runtime.enabled) throw new AppError(403, 'TENANT_DISABLED', 'TENANT_DISABLED: This tenant is disabled.');
     const incident = this.ctx.storage.transactionSync(() => {
       const current = this.automation.getStored(id);
       if (!current) throw new AppError(404, 'INCIDENT_NOT_FOUND', 'INCIDENT_NOT_FOUND: Incident does not exist.');
+      if (current.applicationId) this.assertAutomationApplication(current.applicationId);
       if (actorChatId && !this.canActOnIncident(current, actorChatId)) throw new AppError(403, 'INCIDENT_FORBIDDEN', 'INCIDENT_FORBIDDEN: Action is not permitted.');
       const result = this.automation.act(id, raw, Date.now(), actorChatId);
       this.refreshIncidentDeliveries(result, Date.now(), true);
       return this.automation.publicIncident(result);
     });
-    await this.wake(); return {incident};
+    await this.wake();
+    return {incident};
   }
 
   async previewDelivery(raw: unknown) {
+    this.lifecycle.assertActive();
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new AppError(400, 'INVALID_AUTOMATION_PREVIEW', 'INVALID_AUTOMATION_PREVIEW: Invalid preview.');
     const value = raw as Record<string, unknown>;
-    if (Object.keys(value).some(k => !['applicationId','chatId','level','environment','tags','timestamp'].includes(k)) || typeof value.applicationId !== 'string' || !LEVELS.includes(value.level as typeof LEVELS[number]) || (value.environment !== undefined && (typeof value.environment !== 'string' || value.environment.length > 80)) || (value.tags !== undefined && (!Array.isArray(value.tags) || value.tags.length > 10 || value.tags.some(t => typeof t !== 'string' || t.length > 50))) || (value.timestamp !== undefined && (typeof value.timestamp !== 'string' || !Number.isFinite(Date.parse(value.timestamp))))) throw new AppError(400, 'INVALID_AUTOMATION_PREVIEW', 'INVALID_AUTOMATION_PREVIEW: Invalid preview.');
-    await this.runtime(); this.assertAutomationApplication(value.applicationId);
-    const input = {applicationId: value.applicationId, application: 'Preview', event: 'preview', level: value.level, environment: value.environment, tags: value.tags, timestamp: value.timestamp ?? new Date().toISOString(), text: 'Preview'} as NotificationInput;
+    if (Object.keys(value).some(k => !['applicationId', 'chatId', 'level', 'environment', 'tags', 'timestamp'].includes(k)) || typeof value.applicationId !== 'string' || !LEVELS.includes(value.level as typeof LEVELS[number]) || (value.environment !== undefined && (typeof value.environment !== 'string' || value.environment.length > 80)) || (value.tags !== undefined && (!Array.isArray(value.tags) || value.tags.length > 10 || value.tags.some(t => typeof t !== 'string' || t.length > 50))) || (value.timestamp !== undefined && (typeof value.timestamp !== 'string' || !Number.isFinite(Date.parse(value.timestamp))))) throw new AppError(400, 'INVALID_AUTOMATION_PREVIEW', 'INVALID_AUTOMATION_PREVIEW: Invalid preview.');
+    await this.runtime();
+    this.assertAutomationApplication(value.applicationId);
+    const input = {
+      applicationId: value.applicationId,
+      application: 'Preview',
+      event: 'preview',
+      level: value.level,
+      environment: value.environment,
+      tags: value.tags,
+      timestamp: value.timestamp ?? new Date().toISOString(),
+      text: 'Preview'
+    } as NotificationInput;
     let preferences = structuredClone(DEFAULT_SUBSCRIBER_PREFERENCES);
     if (value.chatId !== undefined) {
       if (typeof value.chatId !== 'string') throw new AppError(400, 'INVALID_SUBSCRIBER', 'INVALID_SUBSCRIBER: Invalid subscriber identifier.');
       preferences = this.getSubscriberPreferences(value.chatId);
-      if (!this.recipientAllowed(input.applicationId ?? null, value.chatId)) return {mode: 'mute' as const, reason: 'Subscriber is inactive, banned, or excluded from this application.', nextAt: null};
+      if (!this.recipientAllowed(input.applicationId ?? null, value.chatId)) return {
+        mode: 'mute' as const,
+        reason: 'Subscriber is inactive, banned, or excluded from this application.',
+        nextAt: null
+      };
     }
     return evaluateDelivery(input, this.automation.getPolicy(input.applicationId).policy, preferences, value.timestamp ? Date.parse(String(value.timestamp)) : Date.now());
   }
 
   private recipientAllowed(applicationId: string | null, chatId: string): boolean {
-    return this.rows(`WITH request AS (SELECT ? AS app_id) SELECT 1 FROM subscribers s CROSS JOIN request r WHERE s.chat_id = ? AND ${this.recipientWhere('r.app_id')}`, applicationId, chatId).length > 0;
+    return this.rows(`WITH request AS (SELECT ? AS app_id)
+                      SELECT 1
+                      FROM subscribers s
+                               CROSS JOIN request r
+                      WHERE s.chat_id = ?
+                        AND ${this.recipientWhere('r.app_id')}`, applicationId, chatId).length > 0;
   }
 
   private canActOnIncident(incident: IncidentStored, chatId: string): boolean {
@@ -1047,12 +1283,15 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   private rescheduleSubscriberPreferences(chatId: string): void {
-    this.sql.exec("UPDATE deliveries SET next_attempt = MIN(next_attempt, ?) WHERE chat_id = ? AND status='pending' AND json_extract(system_payload, '$.delivery_mode') IS NOT NULL",Date.now(),chatId);
+    this.sql.exec("UPDATE deliveries SET next_attempt = MIN(next_attempt, ?) WHERE chat_id = ? AND status='pending' AND json_extract(system_payload, '$.delivery_mode') IS NOT NULL", Date.now(), chatId);
     this.invalidate();
   }
 
   private reschedulePreferenceDeliveries(applicationId: string | null): void {
-    this.sql.exec(`UPDATE deliveries SET next_attempt=MIN(next_attempt, ?) WHERE status='pending' AND ${applicationId ? "notification_id IN (SELECT id FROM notifications WHERE json_extract(input, '$.applicationId') = ?)" : 'notification_id IS NOT NULL'}`,Date.now(),...(applicationId?[applicationId]:[]));
+    this.sql.exec(`UPDATE deliveries
+                   SET next_attempt=MIN(next_attempt, ?)
+                   WHERE status = 'pending'
+                     AND ${applicationId ? "notification_id IN (SELECT id FROM notifications WHERE json_extract(input, '$.applicationId') = ?)" : 'notification_id IS NOT NULL'}`, Date.now(), ...(applicationId ? [applicationId] : []));
     this.invalidate();
   }
 
@@ -1074,65 +1313,111 @@ export class NotificationHub extends DurableObject<Env> {
 
   private refreshIncidentDeliveries(incident: IncidentStored, now: number, immediate = false): void {
     const rich = formatRichNotification(incident.input, incident.source, this.getSettings().showCountryFlag, incident.notificationId, incident);
-    let slots = Math.max(0,this.maxPendingDeliveries-this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')"));
+    let slots = Math.max(0, this.maxPendingDeliveries - this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')"));
     for (const delivery of this.rows<DeliveryRow>('SELECT * FROM deliveries WHERE incident_id = ? LIMIT 10001', incident.id)) {
       // Unknown first sends cannot be resent safely; confirmed IDs make subsequent edits idempotent.
       if (delivery.status === 'unknown' && !delivery.telegram_message_id) continue;
       const original = JSON.parse(delivery.system_payload || '{}');
-      delete original.incident_refresh_pending; delete original.incident_dirty;
+      delete original.incident_refresh_pending;
+      delete original.incident_dirty;
       const messageId = original.was_digest ? null : delivery.telegram_message_id;
-      if (original.was_digest) {delete original.message_id; delete original.digest_due; delete original.was_digest;}
-      const system = {...original, method: messageId ? 'editMessageText' : 'sendRichMessage', rich_message: rich, incident_version: incident.version, ...(messageId ? {message_id: messageId} : {})};
-      if (!this.recipientAllowed(incident.applicationId, delivery.chat_id)) {this.sql.exec("UPDATE deliveries SET status='skipped', error='Recipient is no longer eligible.', updated_at=? WHERE id=? AND status != 'sending'",now,delivery.id);continue;}
-      let due = immediate ? now : delivery.status === 'pending' ? Math.max(now,delivery.next_attempt) : messageId ? Math.max(now, delivery.updated_at + 30000) : now;
+      if (original.was_digest) {
+        delete original.message_id;
+        delete original.digest_due;
+        delete original.was_digest;
+      }
+      const system = {
+        ...original,
+        method: messageId ? 'editMessageText' : 'sendRichMessage',
+        rich_message: rich,
+        incident_version: incident.version, ...(messageId ? {message_id: messageId} : {})
+      };
+      if (!this.recipientAllowed(incident.applicationId, delivery.chat_id)) {
+        this.sql.exec("UPDATE deliveries SET status='skipped', error='Recipient is no longer eligible.', updated_at=? WHERE id=? AND status != 'sending'", now, delivery.id);
+        continue;
+      }
+      let due = immediate ? now : delivery.status === 'pending' ? Math.max(now, delivery.next_attempt) : messageId ? Math.max(now, delivery.updated_at + 30000) : now;
       if (!immediate && incident.status === 'snoozed' && incident.snoozedUntil) due = Math.max(due, Date.parse(incident.snoozedUntil));
       if (delivery.status === 'sending') {
-        this.sql.exec('UPDATE deliveries SET system_payload = ? WHERE id = ?', JSON.stringify({...system, refresh_after_send: true}), delivery.id);
+        this.sql.exec('UPDATE deliveries SET system_payload = ? WHERE id = ?', JSON.stringify({
+          ...system,
+          refresh_after_send: true
+        }), delivery.id);
         continue;
       }
       if (delivery.status !== 'pending') {
         if (slots <= 0) {
-          this.sql.exec('UPDATE deliveries SET system_payload=?, telegram_message_id=?, updated_at=? WHERE id=?',JSON.stringify({...system, incident_dirty: true, incident_refresh_pending: true}),messageId,now,delivery.id);continue;
+          this.sql.exec('UPDATE deliveries SET system_payload=?, telegram_message_id=?, updated_at=? WHERE id=?', JSON.stringify({
+            ...system,
+            incident_dirty: true,
+            incident_refresh_pending: true
+          }), messageId, now, delivery.id);
+          continue;
         }
         slots--;
       }
       this.sql.exec("UPDATE deliveries SET status = 'pending', stage_attempts = 0, next_attempt = ?, system_payload = ?, rendered = ?, telegram_message_id = ?, updated_at = ? WHERE id = ?", due, JSON.stringify(system), formatNotification(incident.input), messageId, now, delivery.id);
-      this.applyDeliveryPreferences({...delivery, next_attempt: due, system_payload: JSON.stringify(system)}, incident.input, now);
+      this.applyDeliveryPreferences({
+        ...delivery,
+        next_attempt: due,
+        system_payload: JSON.stringify(system)
+      }, incident.input, now);
     }
     this.invalidate();
   }
 
   /** State changes are durable even when the delivery queue is full; promote edits as slots free up. */
   private flushIncidentRefreshes(now: number): void {
-    const slots = Math.min(20,Math.max(0,this.maxPendingDeliveries-this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')")));
+    const slots = Math.min(20, Math.max(0, this.maxPendingDeliveries - this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')")));
     if (!slots) return;
-    for (const row of this.rows<DeliveryRow>("SELECT * FROM deliveries WHERE status NOT IN ('pending','sending') AND json_extract(system_payload, '$.incident_refresh_pending') = 1 ORDER BY updated_at LIMIT ?",slots)) {
-      const system = JSON.parse(row.system_payload!); delete system.incident_refresh_pending;
+    for (const row of this.rows<DeliveryRow>("SELECT * FROM deliveries WHERE status NOT IN ('pending','sending') AND json_extract(system_payload, '$.incident_refresh_pending') = 1 ORDER BY updated_at LIMIT ?", slots)) {
+      const system = JSON.parse(row.system_payload!);
+      delete system.incident_refresh_pending;
       const incident = row.incident_id ? this.automation.getStored(row.incident_id) : null;
-      const active = incident && this.recipientAllowed(incident.applicationId,row.chat_id);
-      this.sql.exec('UPDATE deliveries SET status=?, next_attempt=?, stage_attempts=0, system_payload=?, updated_at=? WHERE id=?',active?'pending':'skipped',now,JSON.stringify(system),now,row.id);
+      const active = incident && this.recipientAllowed(incident.applicationId, row.chat_id);
+      this.sql.exec('UPDATE deliveries SET status=?, next_attempt=?, stage_attempts=0, system_payload=?, updated_at=? WHERE id=?', active ? 'pending' : 'skipped', now, JSON.stringify(system), now, row.id);
     }
     this.invalidate();
   }
 
   private processIncidentDeadlines(runtime: TenantRuntime, now: number): void {
     for (const incident of this.automation.due(now)) {
+      if (incident.applicationId && this.lifecycle.applicationDeleted(incident.applicationId)) continue;
       const policy = this.automation.getPolicy(incident.applicationId ?? undefined).policy;
       if (incident.status === 'snoozed') {
-        incident.status = incident.acknowledgedAt ? 'acknowledged' : 'open'; incident.snoozedUntil = null; incident.version++;
+        incident.status = incident.acknowledgedAt ? 'acknowledged' : 'open';
+        incident.snoozedUntil = null;
+        incident.version++;
         incident.nextEscalationAt = incident.status === 'open' && policy.escalation.enabled && incident.level === 'critical' ? new Date(now + policy.escalation.afterMinutes * 60000).toISOString() : null;
-        this.automation.event(incident.id, 'resumed', 'Snooze expired.', now); this.automation.save(incident); this.refreshIncidentDeliveries(incident, now, true); continue;
+        this.automation.event(incident.id, 'resumed', 'Snooze expired.', now);
+        this.automation.save(incident);
+        this.refreshIncidentDeliveries(incident, now, true);
+        continue;
       }
-      if (!policy.escalation.enabled || incident.level !== 'critical' || incident.escalationCount >= policy.escalation.targetChatIds.length) { incident.nextEscalationAt = null; this.automation.save(incident); continue; }
+      if (!policy.escalation.enabled || incident.level !== 'critical' || incident.escalationCount >= policy.escalation.targetChatIds.length) {
+        incident.nextEscalationAt = null;
+        this.automation.save(incident);
+        continue;
+      }
       if (this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')") >= runtime.limits.maxPendingDeliveries) {
-        incident.nextEscalationAt = new Date(now+30000).toISOString(); this.automation.save(incident); continue;
+        incident.nextEscalationAt = new Date(now + 30000).toISOString();
+        this.automation.save(incident);
+        continue;
       }
       const target = policy.escalation.targetChatIds[incident.escalationCount];
-      incident.escalationCount++; incident.version++;
-      incident.nextEscalationAt = incident.escalationCount < policy.escalation.targetChatIds.length ? new Date(now+policy.escalation.afterMinutes*60000).toISOString() : null;
+      incident.escalationCount++;
+      incident.version++;
+      incident.nextEscalationAt = incident.escalationCount < policy.escalation.targetChatIds.length ? new Date(now + policy.escalation.afterMinutes * 60000).toISOString() : null;
       this.automation.save(incident);
       if (this.recipientAllowed(incident.applicationId, target)) {
-        const system = {method: 'sendRichMessage', rich_message: formatRichNotification({...incident.input, title: `Escalation ${incident.escalationCount} · ${incident.title}`}, incident.source, this.getSettings().showCountryFlag, incident.notificationId, incident), escalationIncident: incident.id};
+        const system = {
+          method: 'sendRichMessage',
+          rich_message: formatRichNotification({
+            ...incident.input,
+            title: `Escalation ${incident.escalationCount} · ${incident.title}`
+          }, incident.source, this.getSettings().showCountryFlag, incident.notificationId, incident),
+          escalationIncident: incident.id
+        };
         this.sql.exec('INSERT INTO deliveries (chat_id, rendered, system_payload, updated_at) VALUES (?, ?, ?, ?)', target, `Escalation · ${incident.title}`, JSON.stringify(system), now);
         const delivery = this.rows<DeliveryRow>('SELECT * FROM deliveries WHERE id = last_insert_rowid()')[0];
         this.applyDeliveryPreferences(delivery, incident.input, now);
@@ -1145,24 +1430,44 @@ export class NotificationHub extends DurableObject<Env> {
     if (this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')") >= runtime.limits.maxPendingDeliveries) return false;
     const prefs = this.getSubscriberPreferences(chatId);
     const keyboard = [
-      LEVELS.map(level => ({text: `${prefs.levels.includes(level) ? '✓ ' : ''}${level}`, callback_data: `prefs:level:${level}`})),
-      [{text: prefs.environments.length ? 'Environment: production' : 'Environment: all', callback_data: 'prefs:environment'}],
-      [{text: prefs.delivery === 'digest' ? `Digest: ${prefs.digestMinutes}m` : 'Delivery: immediate', callback_data: 'prefs:digest'}, {text: `Quiet: ${prefs.quietHours.enabled ? 'on' : 'off'}`, callback_data: 'prefs:quiet'}],
+      LEVELS.map(level => ({
+        text: `${prefs.levels.includes(level) ? '✓ ' : ''}${level}`,
+        callback_data: `prefs:level:${level}`
+      })),
+      [{
+        text: prefs.environments.length ? 'Environment: production' : 'Environment: all',
+        callback_data: 'prefs:environment'
+      }],
+      [{
+        text: prefs.delivery === 'digest' ? `Digest: ${prefs.digestMinutes}m` : 'Delivery: immediate',
+        callback_data: 'prefs:digest'
+      }, {text: `Quiet: ${prefs.quietHours.enabled ? 'on' : 'off'}`, callback_data: 'prefs:quiet'}],
       [{text: `Critical bypass: ${prefs.criticalBypass ? 'on' : 'off'}`, callback_data: 'prefs:critical'}],
       [{text: '↩️ منوی اصلی', callback_data: 'menu:home'}]
     ];
-    const system = {method: messageId ? 'editMessageText' : 'sendMessage', ...(messageId ? {message_id: messageId} : {}), preferences_version: prefs.version, reply_markup: {inline_keyboard: keyboard}};
+    const system = {
+      method: messageId ? 'editMessageText' : 'sendMessage', ...(messageId ? {message_id: messageId} : {}),
+      preferences_version: prefs.version,
+      reply_markup: {inline_keyboard: keyboard}
+    };
     const text = `⚙️ Notification preferences\nLevels: ${prefs.levels.join(', ')}\nEnvironment: ${prefs.environments.join(', ') || 'all'}\nTimezone: ${prefs.timezone}\nQuiet hours: ${prefs.quietHours.start}–${prefs.quietHours.end}\nChange timezone: /timezone Europe/Berlin\nChange quiet hours: /quiet 22:00 08:00\nOnly applications you are allowed to receive are included.`;
-    this.sql.exec('INSERT INTO deliveries (chat_id, rendered, system_payload, updated_at) VALUES (?, ?, ?, ?)', chatId, text, JSON.stringify(system), Date.now()); this.invalidate(); return true;
+    this.sql.exec('INSERT INTO deliveries (chat_id, rendered, system_payload, updated_at) VALUES (?, ?, ?, ?)', chatId, text, JSON.stringify(system), Date.now());
+    this.invalidate();
+    return true;
   }
 
   private hasMenuReceipt(chatId: string, messageId: number, action: string): boolean {
-    return this.rows(`SELECT 1 FROM deliveries d, json_each(d.system_payload, '$.reply_markup.inline_keyboard') row,
-      json_each(row.value) button WHERE d.chat_id = ? AND d.telegram_message_id = ?
-      AND d.notification_id IS NULL AND (json_extract(d.system_payload, '$.subscription_menu') IS NOT NULL
-        OR json_extract(d.system_payload, '$.directory_version') IS NOT NULL
-        OR json_extract(d.system_payload, '$.preferences_version') IS NOT NULL)
-      AND json_extract(button.value, '$.callback_data') = ? LIMIT 1`, chatId, messageId, action).length > 0;
+    return this.rows(`SELECT 1
+                      FROM deliveries d,
+                           json_each(d.system_payload, '$.reply_markup.inline_keyboard') row,
+                           json_each(row.value) button
+                      WHERE d.chat_id = ?
+                        AND d.telegram_message_id = ?
+                        AND d.notification_id IS NULL
+                        AND (json_extract(d.system_payload, '$.subscription_menu') IS NOT NULL
+                          OR json_extract(d.system_payload, '$.directory_version') IS NOT NULL
+                          OR json_extract(d.system_payload, '$.preferences_version') IS NOT NULL)
+                        AND json_extract(button.value, '$.callback_data') = ? LIMIT 1`, chatId, messageId, action).length > 0;
   }
 
   private queueSubscriptionPrompt(chatId: string, runtime: TenantRuntime, active: boolean, messageId?: number): boolean {
@@ -1170,7 +1475,11 @@ export class NotificationHub extends DurableObject<Env> {
     this.sql.exec("UPDATE deliveries SET status='skipped', error='Subscription menu replaced.', updated_at=? WHERE chat_id=? AND status='pending' AND json_extract(system_payload, '$.subscription_menu') IS NOT NULL", Date.now(), chatId);
     if (this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('pending','sending')") >= runtime.limits.maxPendingDeliveries) return false;
     const menu = subscriptionMenu(this.settings.welcomeMessage || DEFAULT_SETTINGS.welcomeMessage, active);
-    const system = {method: messageId ? 'editMessageText' : 'sendMessage', ...(messageId ? {message_id: messageId} : {}), subscription_menu: active ? 'active' : 'stopped', reply_markup: menu.reply_markup};
+    const system = {
+      method: messageId ? 'editMessageText' : 'sendMessage', ...(messageId ? {message_id: messageId} : {}),
+      subscription_menu: active ? 'active' : 'stopped',
+      reply_markup: menu.reply_markup
+    };
     this.sql.exec('INSERT INTO deliveries (chat_id, rendered, system_payload, updated_at) VALUES (?, ?, ?, ?)', chatId, menu.text, JSON.stringify(system), Date.now());
     this.invalidate();
     return true;
@@ -1180,8 +1489,12 @@ export class NotificationHub extends DurableObject<Env> {
     if (!update || typeof update !== 'object' || !Number.isSafeInteger((update as Record<string, unknown>).update_id)) return;
     const callback = privateCallback((update as Record<string, unknown>).callback_query);
     return this.withQuota(runtime => {
-      const value = update as {update_id: number; message?: {text?: string; chat?: {id?: number; type?: string}}};
-      if (!runtime.enabled || runtime.botEnabled === false || this.rows('SELECT id FROM telegram_updates WHERE id = ?', value.update_id).length) return {notifications: 0, subscribers: 0, pending: 0};
+      const value = update as { update_id: number; message?: { text?: string; chat?: { id?: number; type?: string } } };
+      if (!runtime.enabled || runtime.botEnabled === false || this.rows('SELECT id FROM telegram_updates WHERE id = ?', value.update_id).length) return {
+        notifications: 0,
+        subscribers: 0,
+        pending: 0
+      };
       const message = value.message;
       const start = message?.chat?.type === 'private' && Number.isSafeInteger(message.chat.id) && typeof message.text === 'string' && /^\/start(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(message.text);
       const resume = callback?.data === 'menu:start' && this.hasMenuReceipt(String(callback.message.chat.id), callback.message.message_id, callback.data);
@@ -1193,8 +1506,13 @@ export class NotificationHub extends DurableObject<Env> {
       const latest = await this.runtime();
       if (latest.enabled && latest.botEnabled && latest.botToken) {
         try {
-          await telegramCall(latest.botToken, 'answerCallbackQuery', {callback_query_id: callback.id, text: 'ظرفیت عضویت تکمیل است؛ بعداً دوباره تلاش کنید.', show_alert: true});
-        } catch { /* No subscription was changed; Telegram may expire the callback. */ }
+          await telegramCall(latest.botToken, 'answerCallbackQuery', {
+            callback_query_id: callback.id,
+            text: 'ظرفیت عضویت تکمیل است؛ بعداً دوباره تلاش کنید.',
+            show_alert: true
+          });
+        } catch { /* No subscription was changed; Telegram may expire the callback. */
+        }
       }
     });
   }
@@ -1210,6 +1528,7 @@ export class NotificationHub extends DurableObject<Env> {
     const outcome = await this.ctx.storage.transaction(async () => {
       // Membership changes, update deduplication and wakeup commit as one unit.
       await this.ensureAlarm(Date.now() + 100);
+      this.lifecycle.assertActive();
       const updateId = value.update_id as number;
       if (this.rows('SELECT id FROM telegram_updates WHERE id = ?', updateId).length) return;
       const now = Date.now();
@@ -1260,14 +1579,29 @@ export class NotificationHub extends DurableObject<Env> {
         const incidentAction = /^inc:(ack|snooze|resolve):([a-f0-9-]{36})$/.exec(String(callback.data));
         if (incidentAction) {
           const incident = this.automation.getStored(incidentAction[2]);
-          const receipt = this.rows(`SELECT 1 FROM deliveries WHERE chat_id = ? AND telegram_message_id = ? AND (incident_id = ? OR json_extract(system_payload, '$.escalationIncident') = ?) LIMIT 1`, chatId, Number(callback.message!.message_id), incidentAction[2], incidentAction[2]).length;
+          const receipt = this.rows(`SELECT 1
+                                     FROM deliveries
+                                     WHERE chat_id = ?
+                                       AND telegram_message_id = ?
+                                       AND (incident_id = ? OR json_extract(system_payload, '$.escalationIncident') =
+                                                               ?) LIMIT 1`, chatId, Number(callback.message!.message_id), incidentAction[2], incidentAction[2]).length;
           acknowledge = true;
-          if (!incident || !receipt || !this.canActOnIncident(incident, chatId)) { acknowledgement = 'Action is not permitted.'; return; }
-          if (incident.status === 'resolved') { acknowledgement = 'This incident is already resolved.'; return; }
+          if (!incident || !receipt || !this.canActOnIncident(incident, chatId)) {
+            acknowledgement = 'Action is not permitted.';
+            return;
+          }
+          if (incident.status === 'resolved') {
+            acknowledgement = 'This incident is already resolved.';
+            return;
+          }
           const action = incidentAction[1] === 'ack' ? 'acknowledge' : incidentAction[1];
-          const changed = this.automation.act(incident.id, {action, expectedVersion: incident.version, ...(action === 'snooze' ? {minutes: 15} : {})}, now, chatId);
+          const changed = this.automation.act(incident.id, {
+            action,
+            expectedVersion: incident.version, ...(action === 'snooze' ? {minutes: 15} : {})
+          }, now, chatId);
           this.refreshIncidentDeliveries(changed, now, true);
-          acknowledgement = `Incident ${changed.status}.`; return;
+          acknowledgement = `Incident ${changed.status}.`;
+          return;
         }
         if (String(callback.data).startsWith('prefs:')) {
           const receipt = this.rows("SELECT 1 FROM deliveries WHERE chat_id = ? AND telegram_message_id = ? AND json_extract(system_payload, '$.preferences_version') IS NOT NULL LIMIT 1", chatId, Number(callback.message!.message_id)).length;
@@ -1278,12 +1612,17 @@ export class NotificationHub extends DurableObject<Env> {
           if (level) patch.levels = patch.levels.includes(level) ? patch.levels.filter(item => item !== level) : [...patch.levels, level];
           else if (callback.data === 'prefs:environment') patch.environments = patch.environments.length ? [] : ['production'];
           else if (callback.data === 'prefs:digest') patch.delivery = patch.delivery === 'digest' ? 'immediate' : 'digest';
-          else if (callback.data === 'prefs:quiet') patch.quietHours = {...patch.quietHours, enabled: !patch.quietHours.enabled};
+          else if (callback.data === 'prefs:quiet') patch.quietHours = {
+            ...patch.quietHours,
+            enabled: !patch.quietHours.enabled
+          };
           else if (callback.data === 'prefs:critical') patch.criticalBypass = !patch.criticalBypass;
           else return;
           this.automation.updatePreferences(chatId, {...patch, expectedVersion: version});
           this.rescheduleSubscriberPreferences(chatId);
-          this.queuePreferencesPrompt(chatId, runtime, Number(callback.message!.message_id)); acknowledge = true; return;
+          this.queuePreferencesPrompt(chatId, runtime, Number(callback.message!.message_id));
+          acknowledge = true;
+          return;
         }
         const visibleApplications = this.allowedApplications(chatId);
         const appId = /^apps:toggle:([a-z0-9][a-z0-9_-]{0,63})$/.exec(String(callback.data))?.[1];
@@ -1324,9 +1663,9 @@ export class NotificationHub extends DurableObject<Env> {
           }
           this.sql.exec(`INSERT INTO subscribers (chat_id, first_name, username, active, joined_at, updated_at)
                          VALUES (?, ?, ?, 1, ?, ?) ON CONFLICT(chat_id) DO
-                         UPDATE
-                         SET
-                             first_name = excluded.first_name, username = excluded.username, active = 1, updated_at = excluded.updated_at`, chatId, String(message.from?.first_name ?? '').slice(0, 200), typeof message.from?.username === 'string' ? message.from.username.slice(0, 100) : null, now, now);
+          UPDATE
+              SET
+                  first_name = excluded.first_name, username = excluded.username, active = 1, updated_at = excluded.updated_at`, chatId, String(message.from?.first_name ?? '').slice(0, 200), typeof message.from?.username === 'string' ? message.from.username.slice(0, 100) : null, now, now);
           if (welcome) this.queueSubscriptionPrompt(chatId, runtime, true);
           this.invalidate();
         } else if (command === 'stop') this.deactivate(chatId, 'Subscriber stopped notifications.');
@@ -1339,12 +1678,15 @@ export class NotificationHub extends DurableObject<Env> {
             const arguments_ = parsedCommand!.argument.split(/\s+/);
             if (command === 'timezone') patch.timezone = arguments_[0] ?? '';
             else patch.quietHours = {enabled: true, start: arguments_[0] ?? '', end: arguments_[1] ?? ''};
-            try { this.automation.updatePreferences(chatId, {...patch, expectedVersion: version}); this.rescheduleSubscriberPreferences(chatId); }
-            catch (error) { if (!(error instanceof AppError)) throw error; }
+            try {
+              this.automation.updatePreferences(chatId, {...patch, expectedVersion: version});
+              this.rescheduleSubscriberPreferences(chatId);
+            } catch (error) {
+              if (!(error instanceof AppError)) throw error;
+            }
           }
           if (!this.queuePreferencesPrompt(chatId, runtime)) return new AppError(429, 'QUEUE_LIMIT', 'QUEUE_LIMIT: There is no capacity for the preferences menu.');
-        }
-        else if (command === 'apps' || command === 'all') {
+        } else if (command === 'apps' || command === 'all') {
           const subscriber = this.rows('SELECT active, banned FROM subscribers WHERE chat_id = ?', chatId)[0];
           if (!runtime.enabled || runtime.botEnabled === false || !subscriber || subscriber.active !== 1 || subscriber.banned === 1) return;
           if (command === 'all') this.changeApplications(chatId, null);
@@ -1438,15 +1780,29 @@ export class NotificationHub extends DurableObject<Env> {
 
   private allowedApplications(chatId: string): DirectoryApplication[] {
     // Use the newest local snapshot even if a previous registry read arrived after an update.
-    return this.rows(`SELECT a.application_id, a.name FROM application_access a JOIN subscribers s ON s.chat_id = ?
-      WHERE a.enabled = 1 AND a.show_in_directory = 1
-      AND (a.audience_mode = 'all' OR EXISTS (SELECT 1 FROM application_audience p WHERE p.application_id = a.application_id AND p.chat_id = s.chat_id))
-      AND (s.access_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_allowed_applications p WHERE p.chat_id = s.chat_id AND p.application_id = a.application_id))
-      ORDER BY a.application_id`, chatId).map((row) => ({id: String(row.application_id), name: String(row.name)}));
+    return this.rows(`SELECT a.application_id, a.name
+                      FROM application_access a
+                               JOIN subscribers s ON s.chat_id = ?
+                      WHERE a.enabled = 1
+                        AND NOT EXISTS (SELECT 1 FROM hub_tombstones t WHERE t.kind='application' AND t.id=a.application_id)
+                        AND a.show_in_directory = 1
+                        AND (a.audience_mode = 'all' OR EXISTS (SELECT 1
+                                                                FROM application_audience p
+                                                                WHERE p.application_id = a.application_id
+                                                                  AND p.chat_id = s.chat_id))
+                        AND (s.access_mode = 'all' OR EXISTS (SELECT 1
+                                                              FROM subscriber_allowed_applications p
+                                                              WHERE p.chat_id = s.chat_id
+                                                                AND p.application_id = a.application_id))
+                      ORDER BY a.application_id`, chatId).map((row) => ({
+      id: String(row.application_id),
+      name: String(row.name)
+    }));
   }
 
   private recipientWhere(applicationId: string): string {
     return `s.active = 1 AND s.banned = 0
+      AND NOT EXISTS (SELECT 1 FROM hub_tombstones t WHERE t.kind='application' AND t.id=${applicationId})
       AND (s.application_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_applications p WHERE p.chat_id = s.chat_id AND p.application_id = ${applicationId}))
       AND (s.access_mode = 'all' OR EXISTS (SELECT 1 FROM subscriber_allowed_applications p WHERE p.chat_id = s.chat_id AND p.application_id = ${applicationId}))
       AND (${applicationId} IS NULL OR EXISTS (SELECT 1 FROM application_access a WHERE a.application_id = ${applicationId} AND a.enabled = 1
@@ -1455,6 +1811,7 @@ export class NotificationHub extends DurableObject<Env> {
 
   /** Re-read local policy after each await; an in-flight attempt must not resurrect a revoked retry. */
   private acceptsDelivery(delivery: DeliveryRow): boolean {
+    if (this.lifecycle.deleted || (delivery.application_id && this.lifecycle.applicationDeleted(delivery.application_id))) return false;
     const subscriber = this.rows('SELECT active, banned, access_mode, application_mode, version FROM subscribers WHERE chat_id = ?', delivery.chat_id)[0];
     if (!subscriber || subscriber.banned === 1) return false;
     if (subscriber.active !== 1) {
@@ -1464,11 +1821,17 @@ export class NotificationHub extends DurableObject<Env> {
       try {
         const system = JSON.parse(delivery.system_payload);
         return system.subscription_menu === 'stopped' && system.method === 'editMessageText' && Number.isSafeInteger(system.message_id) && system.message_id > 0;
-      } catch { return false; }
+      } catch {
+        return false;
+      }
     }
     if (delivery.notification_id) {
       return this.rows(`WITH request AS (SELECT ? AS app_id)
-        SELECT 1 FROM subscribers s CROSS JOIN request r WHERE s.chat_id = ? AND ${this.recipientWhere('r.app_id')}`, delivery.application_id, delivery.chat_id).length > 0;
+                        SELECT 1
+                        FROM subscribers s
+                                 CROSS JOIN request r
+                        WHERE s.chat_id = ?
+                          AND ${this.recipientWhere('r.app_id')}`, delivery.application_id, delivery.chat_id).length > 0;
     }
     if (!delivery.system_payload) return true;
     try {
@@ -1496,9 +1859,14 @@ export class NotificationHub extends DurableObject<Env> {
         const allowed = new Set(this.rows('SELECT application_id FROM subscriber_allowed_applications WHERE chat_id = ?', delivery.chat_id).map((row) => String(row.application_id)));
         if (ids.some((id) => !allowed.has(id))) return false;
       }
-      if (ids.length && this.count(`SELECT COUNT(*) AS count FROM application_access a
-        WHERE a.application_id IN (SELECT value FROM json_each(?)) AND a.enabled = 1 AND a.show_in_directory = 1
-        AND (a.audience_mode = 'all' OR EXISTS (SELECT 1 FROM application_audience p WHERE p.application_id = a.application_id AND p.chat_id = ?))`, JSON.stringify(ids), delivery.chat_id) !== new Set(ids).size) return false;
+      if (ids.length && this.count(`SELECT COUNT(*) AS count
+                                    FROM application_access a
+                                    WHERE a.application_id IN (SELECT value FROM json_each(?))
+                                      AND a.enabled = 1
+                                      AND a.show_in_directory = 1
+                                      AND (a.audience_mode = 'all'
+                                       OR EXISTS (SELECT 1 FROM application_audience p WHERE p.application_id = a.application_id
+                                      AND p.chat_id = ?))`, JSON.stringify(ids), delivery.chat_id) !== new Set(ids).size) return false;
       return true;
     } catch {
       return false;
@@ -1513,27 +1881,36 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   private recoverInterrupted(): void {
-    this.sql.exec("UPDATE deliveries SET status = 'pending', next_attempt = ?, updated_at = ?, error = 'Interrupted message edit will retry.' WHERE status = 'sending' AND (telegram_message_id IS NOT NULL OR (json_type(system_payload, '$.message_id') = 'integer' AND json_extract(system_payload, '$.message_id') > 0)) AND json_extract(system_payload, '$.method') = 'editMessageText' AND COALESCE(json_extract(system_payload, '$.was_digest'),0) = 0 AND stage_attempts < ?", Date.now()+1000, Date.now(), MAX_ATTEMPTS);
+    this.sql.exec("UPDATE deliveries SET status = 'pending', next_attempt = ?, updated_at = ?, error = 'Interrupted message edit will retry.' WHERE status = 'sending' AND (telegram_message_id IS NOT NULL OR (json_type(system_payload, '$.message_id') = 'integer' AND json_extract(system_payload, '$.message_id') > 0)) AND json_extract(system_payload, '$.method') = 'editMessageText' AND COALESCE(json_extract(system_payload, '$.was_digest'),0) = 0 AND stage_attempts < ?", Date.now() + 1000, Date.now(), MAX_ATTEMPTS);
     const result = this.sql.exec(`UPDATE deliveries
-                   SET status     = 'unknown',
-                       error      = CASE
-                                        WHEN stage > 0
-                                            THEN 'Photo was delivered; text delivery was interrupted and cannot be safely retried.'
-                                        ELSE 'Delivery was interrupted; Telegram may have accepted it. It was not sent again.' END,
-                       updated_at = ?
-                   WHERE status = 'sending'`, Date.now());
+                                  SET status     = 'unknown',
+                                      error      = CASE
+                                                       WHEN stage > 0
+                                                           THEN 'Photo was delivered; text delivery was interrupted and cannot be safely retried.'
+                                                       ELSE 'Delivery was interrupted; Telegram may have accepted it. It was not sent again.' END,
+                                      updated_at = ?
+                                  WHERE status = 'sending'`, Date.now());
     if (result.rowsWritten > 0) this.invalidate();
   }
 
   private async ensureAlarm(at: number): Promise<void> {
+    if (this.lifecycle.deleted) return;
     const existing = await this.ctx.storage.getAlarm();
-    if (existing === null || existing > at) await this.ctx.storage.setAlarm(at);
+    if (!this.lifecycle.deleted && (existing === null || existing > at)) await this.ctx.storage.setAlarm(at);
   }
 
   async alarm(): Promise<void> {
+    if (this.lifecycle.deleted) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
     const wakeEpoch = this.wakeEpoch;
     // Persist the watchdog before network I/O. Alarm retries alone are bounded by the platform.
     await this.ctx.storage.setAlarm(Date.now() + 30_000);
+    if (this.lifecycle.deleted) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
     this.recoverInterrupted();
     this.cleanup();
     await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined);
@@ -1554,7 +1931,11 @@ export class NotificationHub extends DurableObject<Env> {
         const now = Date.now();
         // Reserve only the local growth step. Release before Telegram HTTP so
         // incident updates and user revocations can interleave with an attempt.
-        await this.withQuota(current => ({notifications: 0, subscribers: 0, pending: current.enabled && current.botEnabled !== false && !this.settings.paused ? this.pendingIncidentExpansion() + this.automation.due(now).length : 0}), async () => {
+        await this.withQuota(current => ({
+          notifications: 0,
+          subscribers: 0,
+          pending: current.enabled && current.botEnabled !== false && !this.settings.paused ? this.pendingIncidentExpansion() + this.automation.due(now).length : 0
+        }), async () => {
           const current = await this.runtime();
           if (!current.enabled || current.botEnabled === false || this.settings.paused) return;
           this.processIncidentDeadlines(current, now);
@@ -1569,7 +1950,9 @@ export class NotificationHub extends DurableObject<Env> {
                                                  WHERE d.status = 'pending'
                                                    AND d.next_attempt <= ?
                                                    AND s.next_send_at <= ?
-                                                   AND (s.active = 1 OR (d.notification_id IS NULL AND json_extract(d.system_payload, '$.subscription_menu') = 'stopped'))
+                                                   AND (s.active = 1 OR (d.notification_id IS NULL AND
+                                                                         json_extract(d.system_payload, '$.subscription_menu') =
+                                                                         'stopped'))
                                                    AND s.banned = 0
                                                  ORDER BY d.id LIMIT 1`, now, now)[0];
         if (!delivery) break;
@@ -1588,13 +1971,18 @@ export class NotificationHub extends DurableObject<Env> {
           this.invalidate();
         });
         await this.ctx.storage.sync();
-        if (queueEpoch !== this.wakeEpoch || this.getSettings().paused) {this.sql.exec("UPDATE deliveries SET status='pending',next_attempt=? WHERE id=?",Date.now()+100,delivery.id);continue;}
+        if (this.lifecycle.deleted) return;
+        if (queueEpoch !== this.wakeEpoch || this.getSettings().paused) {
+          this.sql.exec("UPDATE deliveries SET status='pending',next_attempt=? WHERE id=?", Date.now() + 100, delivery.id);
+          continue;
+        }
         if (!this.acceptsDelivery(delivery)) {
           this.sql.exec("UPDATE deliveries SET status = 'skipped', error = 'Subscriber was banned, opted out, or excluded this application before delivery.', updated_at = ? WHERE id = ?", Date.now(), delivery.id);
           this.invalidate();
           continue;
         }
         await this.deliver(delivery);
+        if (this.lifecycle.deleted) return;
         await this.withQuota(() => ({notifications: 0, subscribers: 0, pending: 0}), async () => undefined);
       }
     } finally {
@@ -1603,6 +1991,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   private async deliver(delivery: DeliveryRow): Promise<void> {
+    if (this.lifecycle.deleted) return;
     let batch: DeliveryRow[] = [delivery];
     let editing = false;
     try {
@@ -1611,10 +2000,15 @@ export class NotificationHub extends DurableObject<Env> {
         const incident = this.automation.getStored(delivery.incident_id);
         if (incident) {
           const messageId = system.was_digest ? null : delivery.telegram_message_id;
-          system = {...system, method: messageId ? 'editMessageText' : 'sendRichMessage', rich_message: formatRichNotification(incident.input, incident.source, this.getSettings().showCountryFlag, incident.notificationId, incident)};
-          delete system.incident_dirty; delete system.refresh_after_send;
+          system = {
+            ...system,
+            method: messageId ? 'editMessageText' : 'sendRichMessage',
+            rich_message: formatRichNotification(incident.input, incident.source, this.getSettings().showCountryFlag, incident.notificationId, incident)
+          };
+          delete system.incident_dirty;
+          delete system.refresh_after_send;
           if (messageId) system.message_id = messageId; else delete system.message_id;
-          this.sql.exec('UPDATE deliveries SET system_payload=? WHERE id=?',JSON.stringify(system),delivery.id);
+          this.sql.exec('UPDATE deliveries SET system_payload=? WHERE id=?', JSON.stringify(system), delivery.id);
         }
       }
       const input = this.deliveryInput(delivery);
@@ -1624,45 +2018,69 @@ export class NotificationHub extends DurableObject<Env> {
         const decision = evaluateDelivery(input, policy, preferences, Date.now());
         const digestChanged = decision.mode === 'digest' && (system?.digest_version !== `${policy.version}:${preferences.version}` || !system?.digest_due || system.digest_due > Date.now());
         if (decision.mode === 'mute' || decision.mode === 'defer' || decision.reason === 'quiet_hours' || digestChanged) {
-          this.applyDeliveryPreferences(delivery, input, Date.now()); return;
+          this.applyDeliveryPreferences(delivery, input, Date.now());
+          return;
         }
         if (decision.mode === 'immediate' && system) system.delivery_mode = 'immediate';
       }
       const digest = system?.delivery_mode === 'digest' && Number(system.digest_due) <= Date.now();
       if (digest) {
-        const candidates = this.rows<DeliveryRow>(`SELECT d.*, json_extract(n.input, '$.applicationId') AS application_id FROM deliveries d LEFT JOIN notifications n ON n.id = d.notification_id
-          WHERE d.chat_id = ? AND d.status = 'pending' AND d.next_attempt <= ? AND json_extract(d.system_payload, '$.delivery_mode') = 'digest'
-          AND json_extract(d.system_payload, '$.digest_due') <= ? ORDER BY d.id LIMIT 19`, delivery.chat_id, Date.now(), Date.now());
+        const candidates = this.rows<DeliveryRow>(`SELECT d.*,
+                                                          json_extract(n.input, '$.applicationId') AS application_id
+                                                   FROM deliveries d
+                                                            LEFT JOIN notifications n ON n.id = d.notification_id
+                                                   WHERE d.chat_id = ?
+                                                     AND d.status = 'pending'
+                                                     AND d.next_attempt <= ?
+                                                     AND json_extract(d.system_payload, '$.delivery_mode') = 'digest'
+                                                     AND json_extract(d.system_payload, '$.digest_due') <= ?
+                                                   ORDER BY d.id LIMIT 19`, delivery.chat_id, Date.now(), Date.now());
         for (const candidate of candidates) {
-          if (!this.acceptsDelivery(candidate)) {this.sql.exec("UPDATE deliveries SET status='skipped', error='Recipient is no longer eligible.', updated_at=? WHERE id=?",Date.now(),candidate.id);continue;}
-          const item = this.deliveryInput(candidate); if (!item) continue;
+          if (!this.acceptsDelivery(candidate)) {
+            this.sql.exec("UPDATE deliveries SET status='skipped', error='Recipient is no longer eligible.', updated_at=? WHERE id=?", Date.now(), candidate.id);
+            continue;
+          }
+          const item = this.deliveryInput(candidate);
+          if (!item) continue;
           const decision = evaluateDelivery(item, this.automation.getPolicy(item.applicationId).policy, this.getSubscriberPreferences(candidate.chat_id), Date.now());
-          if (decision.mode === 'mute' || decision.mode === 'defer' || decision.reason === 'quiet_hours') {this.applyDeliveryPreferences(candidate,item,Date.now());continue;}
+          if (decision.mode === 'mute' || decision.mode === 'defer' || decision.reason === 'quiet_hours') {
+            this.applyDeliveryPreferences(candidate, item, Date.now());
+            continue;
+          }
           batch.push(candidate);
         }
         const rich = formatRichDigest(batch.map(item => ({input: this.deliveryInput(item)!, ...(item.incident_id ? {incident: this.automation.getStored(item.incident_id) ?? undefined} : {})})), new Date(Date.now()).toISOString());
-        system = {...system, method: 'sendRichMessage', rich_message: rich, was_digest: true}; delete system.message_id;
+        system = {...system, method: 'sendRichMessage', rich_message: rich, was_digest: true};
+        delete system.message_id;
         this.ctx.storage.transactionSync(() => {
           for (const item of batch) {
             const metadata = JSON.parse(item.system_payload || '{}');
             delete metadata.message_id;
-            this.sql.exec("UPDATE deliveries SET status='sending', telegram_message_id=NULL, stage_attempts=stage_attempts+?, attempts=attempts+?, system_payload=?, updated_at=? WHERE id=?", item.id === delivery.id ? 0 : 1, item.id === delivery.id ? 0 : 1, JSON.stringify({...metadata, method:'sendRichMessage', was_digest:true}), Date.now(), item.id);
+            this.sql.exec("UPDATE deliveries SET status='sending', telegram_message_id=NULL, stage_attempts=stage_attempts+?, attempts=attempts+?, system_payload=?, updated_at=? WHERE id=?", item.id === delivery.id ? 0 : 1, item.id === delivery.id ? 0 : 1, JSON.stringify({
+              ...metadata,
+              method: 'sendRichMessage',
+              was_digest: true
+            }), Date.now(), item.id);
           }
         });
         const digestEpoch = this.wakeEpoch;
         // Every member becomes uncertain together if the isolate disappears during the one network attempt.
         await this.ctx.storage.sync();
+        if (this.lifecycle.deleted) return;
         const changedPreferences = (item: DeliveryRow) => {
           const input = this.deliveryInput(item)!;
           const policy = this.automation.getPolicy(input.applicationId).policy;
           const prefs = this.getSubscriberPreferences(item.chat_id);
-          const decision = evaluateDelivery(input,policy,prefs,Date.now());
-          return ['mute','defer'].includes(decision.mode) || decision.reason === 'quiet_hours' || (decision.mode === 'digest' && JSON.parse(item.system_payload || '{}').digest_version !== `${policy.version}:${prefs.version}`);
+          const decision = evaluateDelivery(input, policy, prefs, Date.now());
+          return ['mute', 'defer'].includes(decision.mode) || decision.reason === 'quiet_hours' || (decision.mode === 'digest' && JSON.parse(item.system_payload || '{}').digest_version !== `${policy.version}:${prefs.version}`);
         };
         if (digestEpoch !== this.wakeEpoch || this.getSettings().paused || batch.some(item => !this.acceptsDelivery(item) || changedPreferences(item))) {
           for (const item of batch) {
-            if (!this.acceptsDelivery(item)) this.sql.exec("UPDATE deliveries SET status='skipped', error='Digest audience changed before send.',updated_at=? WHERE id=?",Date.now(),item.id);
-            else this.applyDeliveryPreferences({...item, next_attempt: Date.now()+100},this.deliveryInput(item)!,Date.now());
+            if (!this.acceptsDelivery(item)) this.sql.exec("UPDATE deliveries SET status='skipped', error='Digest audience changed before send.',updated_at=? WHERE id=?", Date.now(), item.id);
+            else this.applyDeliveryPreferences({
+              ...item,
+              next_attempt: Date.now() + 100
+            }, this.deliveryInput(item)!, Date.now());
           }
           return;
         }
@@ -1679,8 +2097,13 @@ export class NotificationHub extends DurableObject<Env> {
       } else {
         if (system?.reply_markup) payload.reply_markup = system.reply_markup;
         if (system?.message_id) payload.message_id = system.message_id;
-        if (isPhoto) { payload.photo = delivery.image; payload.caption = separateText ? `${delivery.rendered.split('\n')[0].slice(0,900)}\nDetails follow in the next message.` : delivery.rendered; }
-        else { payload.text = delivery.rendered; payload.link_preview_options = {is_disabled:true}; }
+        if (isPhoto) {
+          payload.photo = delivery.image;
+          payload.caption = separateText ? `${delivery.rendered.split('\n')[0].slice(0, 900)}\nDetails follow in the next message.` : delivery.rendered;
+        } else {
+          payload.text = delivery.rendered;
+          payload.link_preview_options = {is_disabled: true};
+        }
       }
       const method = editing ? 'editMessageText' : rich ? 'sendRichMessage' : isPhoto ? 'sendPhoto' : 'sendMessage';
       if (editing) delete payload.disable_notification;
@@ -1688,13 +2111,14 @@ export class NotificationHub extends DurableObject<Env> {
       // rotations. No await may separate this check from starting the HTTP call.
       const sendEpoch = this.wakeEpoch;
       let fresh: TenantRuntime;
-      try { fresh = await this.runtime(); }
-      catch {
-        for (const item of batch) this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=?, updated_at=? WHERE id=?", Date.now()+30000, Date.now(), item.id);
+      try {
+        fresh = await this.runtime();
+      } catch {
+        for (const item of batch) this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=?, updated_at=? WHERE id=?", Date.now() + 30000, Date.now(), item.id);
         return;
       }
       if (!fresh.enabled || fresh.botEnabled === false || !fresh.botToken || this.settings.paused || sendEpoch !== this.wakeEpoch) {
-        for (const item of batch) this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=?, updated_at=? WHERE id=?", Date.now()+100, Date.now(), item.id);
+        for (const item of batch) this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=?, updated_at=? WHERE id=?", Date.now() + 100, Date.now(), item.id);
         return;
       }
       if (batch.some(item => !this.acceptsDelivery(item))) {
@@ -1714,14 +2138,15 @@ export class NotificationHub extends DurableObject<Env> {
       if (preferenceChanged) {
         for (const item of batch) {
           const input = this.deliveryInput(item);
-          if (input) this.applyDeliveryPreferences({...item, next_attempt: Date.now()+100}, input, Date.now());
-          else this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=? WHERE id=?", Date.now()+100, item.id);
+          if (input) this.applyDeliveryPreferences({...item, next_attempt: Date.now() + 100}, input, Date.now());
+          else this.sql.exec("UPDATE deliveries SET status='pending', next_attempt=? WHERE id=?", Date.now() + 100, item.id);
         }
         return;
       }
-      const result = await telegramCall(fresh.botToken,method,payload);
+      const result = await telegramCall(fresh.botToken, method, payload);
+      if (this.lifecycle.deleted) return;
       const messageId = Number(result.result?.message_id);
-      if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new TelegramError('Telegram response is uncertain (missing message identifier).',0,true);
+      if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new TelegramError('Telegram response is uncertain (missing message identifier).', 0, true);
       const now = Date.now();
       for (const item of batch) {
         const latest = this.rows<DeliveryRow>('SELECT * FROM deliveries WHERE id = ?', item.id)[0];
@@ -1729,33 +2154,44 @@ export class NotificationHub extends DurableObject<Env> {
         if (latestSystem.refresh_after_send && item.incident_id) {
           delete latestSystem.refresh_after_send;
           latestSystem.method = digest ? 'sendRichMessage' : 'editMessageText';
-          if (digest) {delete latestSystem.message_id; delete latestSystem.was_digest; delete latestSystem.digest_due;} else latestSystem.message_id = messageId;
-          this.sql.exec("UPDATE deliveries SET status='pending',stage_attempts=0,telegram_message_id=?,system_payload=?,next_attempt=?,error=NULL,updated_at=? WHERE id=?", digest ? null : messageId,JSON.stringify(latestSystem),now+1000,now,item.id);
+          if (digest) {
+            delete latestSystem.message_id;
+            delete latestSystem.was_digest;
+            delete latestSystem.digest_due;
+          } else latestSystem.message_id = messageId;
+          this.sql.exec("UPDATE deliveries SET status='pending',stage_attempts=0,telegram_message_id=?,system_payload=?,next_attempt=?,error=NULL,updated_at=? WHERE id=?", digest ? null : messageId, JSON.stringify(latestSystem), now + 1000, now, item.id);
         } else if (separateText) {
           const active = this.acceptsDelivery(item);
-          this.sql.exec('UPDATE deliveries SET status=?,stage=1,stage_attempts=0,error=?,next_attempt=?,telegram_message_id=?,updated_at=? WHERE id=?',active?'pending':'skipped',active?null:'Photo was delivered; subscriber stopped before text delivery.',now+1000,messageId,now,item.id);
-        } else this.sql.exec("UPDATE deliveries SET status='sent',error=NULL,telegram_message_id=?,updated_at=? WHERE id=?",messageId,now,item.id);
+          this.sql.exec('UPDATE deliveries SET status=?,stage=1,stage_attempts=0,error=?,next_attempt=?,telegram_message_id=?,updated_at=? WHERE id=?', active ? 'pending' : 'skipped', active ? null : 'Photo was delivered; subscriber stopped before text delivery.', now + 1000, messageId, now, item.id);
+        } else this.sql.exec("UPDATE deliveries SET status='sent',error=NULL,telegram_message_id=?,updated_at=? WHERE id=?", messageId, now, item.id);
       }
     } catch (error) {
-      const failure = error instanceof TelegramError ? error : new TelegramError('Delivery result is uncertain.',0,true);
+      if (this.lifecycle.deleted) return;
+      const failure = error instanceof TelegramError ? error : new TelegramError('Delivery result is uncertain.', 0, true);
       const now = Date.now();
-      if (failure.code === 429 && failure.retryAfter) this.sql.exec("INSERT INTO queue_state (key,value) VALUES ('next_send_at',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)",now+failure.retryAfter*1000);
+      if (failure.code === 429 && failure.retryAfter) this.sql.exec("INSERT INTO queue_state (key,value) VALUES ('next_send_at',?) ON CONFLICT(key) DO UPDATE SET value=MAX(value,excluded.value)", now + failure.retryAfter * 1000);
       for (const item of batch) {
         const active = this.acceptsDelivery(item);
         const retry = (failure.code === 429 && failure.retryAfter) || (editing && failure.uncertain);
-        if (retry && item.stage_attempts+1 < MAX_ATTEMPTS && active) {
-          const retryAt = now + (failure.retryAfter ? failure.retryAfter*1000 : Math.min(30000, 1000*2**item.stage_attempts));
-          this.sql.exec("UPDATE deliveries SET status='pending',next_attempt=?,error=?,updated_at=? WHERE id=?",retryAt,failure.message,now,item.id);
+        if (retry && item.stage_attempts + 1 < MAX_ATTEMPTS && active) {
+          const retryAt = now + (failure.retryAfter ? failure.retryAfter * 1000 : Math.min(30000, 1000 * 2 ** item.stage_attempts));
+          this.sql.exec("UPDATE deliveries SET status='pending',next_attempt=?,error=?,updated_at=? WHERE id=?", retryAt, failure.message, now, item.id);
         } else {
           const status = failure.uncertain ? 'unknown' : !active && failure.code === 429 ? 'skipped' : 'failed';
-          this.sql.exec('UPDATE deliveries SET status=?,error=?,updated_at=? WHERE id=?',status,(item.stage>0?'Photo was delivered. ':'')+failure.message,now,item.id);
+          this.sql.exec('UPDATE deliveries SET status=?,error=?,updated_at=? WHERE id=?', status, (item.stage > 0 ? 'Photo was delivered. ' : '') + failure.message, now, item.id);
         }
       }
-      if (failure.code === 403 && !failure.uncertain) this.deactivate(delivery.chat_id,'Bot blocked or access to this chat was revoked.');
-    } finally {this.invalidate();}
+      if (failure.code === 403 && !failure.uncertain) this.deactivate(delivery.chat_id, 'Bot blocked or access to this chat was revoked.');
+    } finally {
+      this.invalidate();
+    }
   }
 
   private async scheduleRemaining(tenantReady = true, wakeEpoch = this.wakeEpoch, runtimeUnavailable = false): Promise<void> {
+    if (this.lifecycle.deleted) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
     const settings = this.getSettings();
     const now = Date.now();
     if (wakeEpoch !== this.wakeEpoch) {
@@ -1769,14 +2205,16 @@ export class NotificationHub extends DurableObject<Env> {
     }
     if (tenantReady && !settings.paused) {
       const queueDue = this.rows(`SELECT MIN(MAX(d.next_attempt, s.next_send_at)) AS due
-                              FROM deliveries d
-                                       JOIN subscribers s ON s.chat_id = d.chat_id
-                              WHERE d.status = 'pending'
-                                AND (s.active = 1 OR (d.notification_id IS NULL AND json_extract(d.system_payload, '$.subscription_menu') = 'stopped'))
-                                AND s.banned = 0`)[0]?.due;
+                                  FROM deliveries d
+                                           JOIN subscribers s ON s.chat_id = d.chat_id
+                                  WHERE d.status = 'pending'
+                                    AND (s.active = 1 OR (d.notification_id IS NULL AND
+                                                          json_extract(d.system_payload, '$.subscription_menu') =
+                                                          'stopped'))
+                                    AND s.banned = 0`)[0]?.due;
       const deadline = this.automation.nextDeadline();
-      const deferredEdit = typeof queueDue !== 'number' && this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status NOT IN ('pending','sending') AND json_extract(system_payload, '$.incident_refresh_pending') = 1") ? now+100 : Infinity;
-      const next = Math.min(typeof queueDue === 'number' ? queueDue : Infinity, deadline ?? Infinity,deferredEdit);
+      const deferredEdit = typeof queueDue !== 'number' && this.count("SELECT COUNT(*) AS count FROM deliveries WHERE status NOT IN ('pending','sending') AND json_extract(system_payload, '$.incident_refresh_pending') = 1") ? now + 100 : Infinity;
+      const next = Math.min(typeof queueDue === 'number' ? queueDue : Infinity, deadline ?? Infinity, deferredEdit);
       if (Number.isFinite(next)) {
         const globalNext = Number(this.rows("SELECT value FROM queue_state WHERE key = 'next_send_at'")[0]?.value ?? 0);
         // No await separates queue inspection and scheduling; an enqueue cannot interleave here.
@@ -1790,6 +2228,7 @@ export class NotificationHub extends DurableObject<Env> {
   }
 
   private cleanup(): void {
+    if (this.lifecycle.deleted) return;
     const now = Date.now();
     if (now >= this.lastCleanupAt && now - this.lastCleanupAt < CLEANUP_INTERVAL) return;
     const cutoff = now - this.getSettings().retentionDays * DAY;
@@ -1803,7 +2242,11 @@ export class NotificationHub extends DurableObject<Env> {
                                   FROM notifications n
                                   WHERE n.purging = 0
                                     AND n.created_at < ?
-                                    AND NOT EXISTS (SELECT 1 FROM notification_incidents ni JOIN incidents i ON i.id = ni.incident_id WHERE ni.notification_id = n.id AND (i.status != 'resolved' OR i.last_seen >= ?))
+                                    AND NOT EXISTS (SELECT 1
+                                                    FROM notification_incidents ni
+                                                             JOIN incidents i ON i.id = ni.incident_id
+                                                    WHERE ni.notification_id = n.id
+                                                      AND (i.status != 'resolved' OR i.last_seen >= ?))
                                     AND NOT EXISTS (SELECT 1
                                                     FROM deliveries d
                                                     WHERE d.notification_id = n.id

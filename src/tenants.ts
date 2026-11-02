@@ -8,12 +8,19 @@ import type {
   LoginAuditInput,
   LoginAuditPage,
   LoginAuditQuery,
+  Page,
+  ResourceDeletion,
+  ResourceDeletionResult,
+  Settings,
+  TelegramBot,
+  TelegramBotCreate,
+  TelegramBotUpdate,
   Tenant,
   TenantCreate,
   TenantLimits,
   TenantRuntime,
   TenantUpdate,
-  TelegramBot, TelegramBotCreate, TelegramBotUpdate, Page, TenantUsage
+  TenantUsage
 } from './types';
 import {DEFAULT_SETTINGS, DEFAULT_TENANT_LIMITS, hubName} from './types';
 import {telegramCall, TelegramError} from './telegram';
@@ -34,6 +41,7 @@ interface StoredTenant {
   webhookSecret: string | null;
   botId: string | null;
   botUsername: string | null;
+  fallbackAccess?: Pick<Settings, 'ipMode' | 'ipRules' | 'countryMode' | 'countries'>;
 }
 
 interface TenantRow extends Record<string, SqlStorageValue> {
@@ -46,6 +54,9 @@ interface StatusEntry {
   expires: number;
   status: BotStatus
 }
+
+type DeletionKind = 'tenant' | 'bot' | 'application';
+type CleanupJob = { kind: DeletionKind; tenant_id: string; resource_id: string; bot_id: string; not_before: number };
 
 const MAX_TENANTS = 500;
 
@@ -100,6 +111,8 @@ function tokenIdentity(token: string): string | null {
 
 /** The registry loads its bounded table once; tenant/runtime reads never query SQLite. */
 export class TenantRegistry extends DurableObject<Env> {
+  private cleanupRunning: Promise<void> | null = null;
+  private readonly pendingApplicationCleanup = new Map<string, Set<string>>();
   private readonly applications: ApplicationStore;
   private readonly bots: BotStore;
   private readonly loginAudit: LoginAuditStore;
@@ -113,6 +126,38 @@ export class TenantRegistry extends DurableObject<Env> {
     this.bots = new BotStore(ctx.storage.sql);
     this.loginAudit = new LoginAuditStore(ctx.storage.sql);
     ctx.blockConcurrencyWhile(async () => {
+      ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS resource_cleanup_jobs
+      (
+          kind
+          TEXT
+          NOT
+          NULL,
+          tenant_id
+          TEXT
+          NOT
+          NULL,
+          resource_id
+          TEXT
+          NOT
+          NULL,
+          bot_id
+          TEXT
+          NOT
+          NULL,
+          not_before
+          INTEGER
+          NOT
+          NULL
+          DEFAULT
+          0,
+          PRIMARY
+          KEY
+                            (
+          kind,
+          tenant_id,
+          resource_id
+                            )
+          )`);
       ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS tenant_wake_jobs (tenant_id TEXT PRIMARY KEY, cursor TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL)");
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS tenant_bot_usage (tenant_id TEXT NOT NULL, bot_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(tenant_id,bot_id))');
       ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, body TEXT NOT NULL)');
@@ -123,7 +168,12 @@ export class TenantRegistry extends DurableObject<Env> {
         botToken: null, webhookSecret: null, botId: null, botUsername: null,
       };
       ctx.storage.sql.exec('INSERT OR IGNORE INTO tenants (id, body) VALUES (?, ?)', initial.id, JSON.stringify(initial));
-      const rows = ctx.storage.sql.exec<TenantRow>('SELECT id, body FROM tenants LIMIT 501').toArray();
+      const rows = ctx.storage.sql.exec<TenantRow>(`SELECT id, body
+                                                    FROM tenants
+                                                    WHERE NOT EXISTS (SELECT 1
+                                                                      FROM resource_tombstones
+                                                                      WHERE kind = 'tenant'
+                                                                        AND tenant_id = tenants.id) LIMIT 501`).toArray();
       if (rows.length > MAX_TENANTS) fail('INVALID_TENANT', 'Tenant registry capacity was exceeded.');
       for (const row of rows) {
         const stored = JSON.parse(row.body);
@@ -131,8 +181,243 @@ export class TenantRegistry extends DurableObject<Env> {
         this.tenants.set(row.id, stored as StoredTenant);
         this.migrateDefaultBot(stored as StoredTenant);
       }
-      if (ctx.storage.sql.exec('SELECT 1 FROM tenant_wake_jobs LIMIT 1').toArray().length) await this.scheduleRegistryAlarm(Date.now() + 100);
+      for (const job of ctx.storage.sql.exec<CleanupJob>("SELECT kind,tenant_id,resource_id,bot_id,not_before FROM resource_cleanup_jobs WHERE kind='application'")) {
+        this.cacheApplicationCleanup(job.tenant_id, job.bot_id, job.resource_id);
+      }
+      if (ctx.storage.sql.exec('SELECT 1 FROM tenant_wake_jobs UNION ALL SELECT 1 FROM resource_cleanup_jobs LIMIT 1').toArray().length) await this.scheduleRegistryAlarm(Date.now() + 100);
     });
+  }
+
+  /** Require a reviewed version for destructive operations; optional update versions are insufficient. */
+  private deletionVersion(input: ResourceDeletion): number {
+    const data = record(input, 'INVALID_DELETION');
+    onlyKeys(data, ['expectedVersion'], 'INVALID_DELETION');
+    if (!Number.isSafeInteger(data.expectedVersion) || Number(data.expectedVersion) < 1) fail('INVALID_DELETION', 'expectedVersion is required.');
+    return data.expectedVersion as number;
+  }
+
+  /** Retired IDs never identify a fresh resource, even after every data row is purged. */
+  private retired(kind: DeletionKind, tenantId: string, id: string): { version: number; bot_id: string } | null {
+    return this.ctx.storage.sql.exec<{
+      version: number;
+      bot_id: string
+    }>('SELECT version,bot_id FROM resource_tombstones WHERE kind=? AND tenant_id=? AND resource_id=?', kind, tenantId, id).toArray()[0] ?? null;
+  }
+
+  /** Keep the irreversible identity fence and cleanup intent in the same local transaction. */
+  private tombstone(kind: DeletionKind, tenantId: string, id: string, botId: string, version: number): void {
+    this.ctx.storage.sql.exec('INSERT OR IGNORE INTO resource_tombstones(kind,tenant_id,resource_id,bot_id,version,deleted_at) VALUES(?,?,?,?,?,?)', kind, tenantId, id, botId, version, new Date().toISOString());
+  }
+
+  /** Schedule a bounded cleanup that remains resumable after an isolate or network failure. */
+  private cleanupJob(kind: DeletionKind, tenantId: string, id: string, botId: string): void {
+    this.ctx.storage.sql.exec('INSERT OR IGNORE INTO resource_cleanup_jobs(kind,tenant_id,resource_id,bot_id) VALUES(?,?,?,?)', kind, tenantId, id, botId);
+    if (kind === 'application') this.cacheApplicationCleanup(tenantId, botId, id);
+  }
+
+  /** Keep warm runtime reads independent from SQLite, including pending deletion fences. */
+  private cacheApplicationCleanup(tenantId: string, botId: string, id: string): void {
+    const key = `${tenantId}:${botId}`;
+    const ids = this.pendingApplicationCleanup.get(key) ?? new Set<string>();
+    ids.add(id);
+    this.pendingApplicationCleanup.set(key, ids);
+  }
+
+  /** Remove application credentials before cross-object cleanup can yield. */
+  private retireApplications(tenantId: string, botId?: string): void {
+    for (const application of this.applications.list(tenantId, botId)) {
+      this.tombstone('application', tenantId, application.id, application.botId, application.version);
+      this.applications.remove(tenantId, application.id);
+    }
+  }
+
+  /** Retry callers observe pending parent cleanup as well as their own cleanup job. */
+  private deletionPending(kind: DeletionKind, tenantId: string, id: string): boolean {
+    const botId = this.retired(kind, tenantId, id)?.bot_id ?? '';
+    return !!this.ctx.storage.sql.exec(`SELECT 1
+                                        FROM resource_cleanup_jobs
+                                        WHERE tenant_id = ?
+                                          AND ((kind = ? AND resource_id = ?) OR kind = 'tenant' OR
+                                               (kind = 'bot' AND bot_id = ?)) LIMIT 1`, tenantId, kind, id, botId).toArray().length;
+  }
+
+  /** Report immediate access revocation without losing durable work when downstream cleanup fails. */
+  private async finishDeletion(kind: DeletionKind, tenantId: string, id: string): Promise<ResourceDeletionResult> {
+    if (!this.deletionPending(kind, tenantId, id)) return {deleted: true, cleanupPending: false};
+    await this.scheduleRegistryAlarm(Date.now() + 100);
+    await this.drainCleanup();
+    return {deleted: true, cleanupPending: this.deletionPending(kind, tenantId, id)};
+  }
+
+  /** Purge a tenant's fleet data while preserving the system tenant used for administration. */
+  async deleteTenant(id: string, input: ResourceDeletion): Promise<ResourceDeletionResult> {
+    const version = this.deletionVersion(input);
+    tenantId(id);
+    if (id === 'default') fail('DEFAULT_RESOURCE_PROTECTED', 'The system tenant cannot be deleted.');
+    const retired = this.retired('tenant', id, id);
+    if (retired) {
+      if (retired.version !== version) fail('STALE_TENANT', 'The deleted tenant version does not match.');
+      return this.finishDeletion('tenant', id, id);
+    }
+    const tenant = this.stored(id);
+    this.checkVersion(tenant, version);
+    this.ctx.storage.transactionSync(() => {
+      this.tombstone('tenant', id, id, '', version);
+      this.retireApplications(id);
+      this.ctx.storage.sql.exec('DELETE FROM resource_cleanup_jobs WHERE tenant_id=?', id);
+      this.ctx.storage.sql.exec('DELETE FROM tenant_wake_jobs WHERE tenant_id=?', id);
+      this.ctx.storage.sql.exec('DELETE FROM tenant_bot_usage WHERE tenant_id=?', id);
+      this.cleanupJob('tenant', id, id, '');
+      this.ctx.storage.sql.exec('UPDATE tenants SET body=? WHERE id=?', JSON.stringify({
+        ...tenant,
+        enabled: false,
+        botToken: null,
+        webhookSecret: null
+      }), id);
+    });
+    this.tenants.delete(id);
+    for (const key of this.pendingApplicationCleanup.keys()) if (key.startsWith(`${id}:`)) this.pendingApplicationCleanup.delete(key);
+    this.clearStatus(id);
+    return this.finishDeletion('tenant', id, id);
+  }
+
+  /** Delete a bot and all its application credentials before purging its isolated Hub. */
+  async deleteBot(id: string, botId: string, input: ResourceDeletion): Promise<ResourceDeletionResult> {
+    const version = this.deletionVersion(input);
+    this.stored(id);
+    const retired = this.retired('bot', id, botId);
+    if (retired) {
+      if (retired.version !== version) fail('STALE_BOT', 'The deleted bot version does not match.');
+      return this.finishDeletion('bot', id, botId);
+    }
+    // Serialize the default policy snapshot with dashboard settings writes.
+    let failure: unknown;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        const before = this.storedBot(id, botId), tenant = this.stored(id);
+        this.checkBotVersion(before, version);
+        let fallbackAccess = tenant.fallbackAccess;
+        if (botId === 'default') {
+          const settings = await this.env.HUB.getByName(hubName(id)).getSettings();
+          fallbackAccess = {ipMode: settings.ipMode, ipRules: settings.ipRules, countryMode: settings.countryMode, countries: settings.countries};
+        }
+        this.ctx.storage.transactionSync(() => {
+          this.tombstone('bot', id, botId, botId, version);
+          this.retireApplications(id, botId);
+          this.ctx.storage.sql.exec("DELETE FROM resource_cleanup_jobs WHERE tenant_id=? AND bot_id=? AND kind='application'", id, botId);
+          this.ctx.storage.sql.exec('DELETE FROM tenant_bot_usage WHERE tenant_id=? AND bot_id=?', id, botId);
+          this.cleanupJob('bot', id, botId, botId);
+          this.commit(this.changed(tenant, botId === 'default' ? {botToken: null, webhookSecret: null, botId: null, botUsername: null, fallbackAccess} : {}));
+        });
+        this.bots.forget(id, botId);
+        this.pendingApplicationCleanup.delete(`${id}:${botId}`);
+        this.clearStatus(id);
+      } catch (error) { failure = error; }
+    });
+    if (failure) throw failure;
+    return this.finishDeletion('bot', id, botId);
+  }
+
+  /** Revoke one ingestion key and remove only its application's delivery and policy data. */
+  async deleteApplication(id: string, applicationId: string, input: ResourceDeletion, selectedBotId?: string): Promise<ResourceDeletionResult> {
+    const version = this.deletionVersion(input);
+    this.stored(id);
+    const retired = this.retired('application', id, applicationId);
+    if (retired) {
+      if (selectedBotId !== undefined && selectedBotId !== retired.bot_id) fail('APPLICATION_NOT_FOUND', 'Application is outside the selected bot.');
+      if (retired.version !== version) fail('STALE_APPLICATION', 'The deleted application version does not match.');
+      return this.finishDeletion('application', id, applicationId);
+    }
+    const application = this.applications.get(id, applicationId);
+    if (!application || (selectedBotId !== undefined && selectedBotId !== application.botId)) fail('APPLICATION_NOT_FOUND', 'Application was not found.');
+    if (application.version !== version) fail('STALE_APPLICATION', 'Application changed before deletion.');
+    this.ctx.storage.transactionSync(() => {
+      this.tombstone('application', id, applicationId, application.botId, version);
+      this.applications.remove(id, applicationId);
+      this.cleanupJob('application', id, applicationId, application.botId);
+    });
+    this.clearStatus(id);
+    return this.finishDeletion('application', id, applicationId);
+  }
+
+  /** Serialize dashboard settings with deletion so a stricter access policy cannot be lost. */
+  async updateBotSettings(id: string, botId: string, settings: Settings): Promise<Settings> {
+    let result: Settings | undefined, failure: unknown;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        this.storedBot(id, botId);
+        result = await this.env.HUB.getByName(hubName(id, botId)).updateSettings(settings);
+      } catch (error) { failure = error; }
+    });
+    if (failure) throw failure;
+    return result!;
+  }
+
+  /** Preserve inherited access restrictions after an operator removes the default bot. */
+  getInheritedAccess(id: string): StoredTenant['fallbackAccess'] | null {
+    return clone(this.stored(id).fallbackAccess ?? null);
+  }
+
+  /** Forget stale in-flight status results when resource ownership changes. */
+  private clearStatus(id: string): void {
+    for (const key of this.statuses.keys()) if (key.startsWith(`${id}:`)) this.statuses.delete(key);
+    for (const key of this.statusRequests.keys()) if (key.startsWith(`${id}:`)) this.statusRequests.delete(key);
+  }
+
+  /** Only one local cleanup runs at a time, preventing stale webhook removal after reassignment. */
+  private async drainCleanup(): Promise<void> {
+    if (this.cleanupRunning) return this.cleanupRunning;
+    const running = this.processCleanupJob();
+    this.cleanupRunning = running;
+    try {
+      await running;
+    } finally {
+      if (this.cleanupRunning === running) this.cleanupRunning = null;
+    }
+  }
+
+  /** Process at most one bot or one bounded Hub purge pass per alarm/request. */
+  private async processCleanupJob(): Promise<void> {
+    const job = this.ctx.storage.sql.exec<CleanupJob>('SELECT kind,tenant_id,resource_id,bot_id,not_before FROM resource_cleanup_jobs WHERE not_before<=? ORDER BY not_before,tenant_id,kind,resource_id LIMIT 1', Date.now()).toArray()[0];
+    if (!job) return;
+    try {
+      if (job.kind === 'application') {
+        const done = await this.env.HUB.getByName(hubName(job.tenant_id, job.bot_id)).removeApplication(job.resource_id);
+        if (!done) return;
+      } else {
+        const botId = job.kind === 'bot' ? job.bot_id : this.bots.ids(job.tenant_id, '', true)[0];
+        if (botId !== undefined) {
+          const bot = this.bots.cleanupRecord(job.tenant_id, botId);
+          const done = await this.env.HUB.getByName(hubName(job.tenant_id, botId)).decommission();
+          if (!done) return;
+          if (bot?.botToken) {
+            try {
+              const result = await telegramCall<boolean>(bot.botToken, 'deleteWebhook', {drop_pending_updates: true});
+              if (result.result !== true) throw new Error('Webhook removal was not confirmed.');
+            } catch (error) {
+              if (!(error instanceof TelegramError) || ![401, 404].includes(error.code)) throw error;
+            }
+          }
+          // The identity stays reserved until deleteWebhook is terminal. No stale
+          // cleanup can later remove a newly assigned owner's webhook.
+          this.bots.remove(job.tenant_id, botId);
+          if (job.kind === 'tenant' && this.bots.ids(job.tenant_id, '', true).length) return;
+        }
+        if (job.kind === 'tenant') {
+          if (!await this.env.HUB.getByName(`tenant-control:${job.tenant_id}`).decommission()) return;
+          this.ctx.storage.sql.exec('DELETE FROM tenants WHERE id=?', job.tenant_id);
+        }
+      }
+      this.ctx.storage.sql.exec('DELETE FROM resource_cleanup_jobs WHERE kind=? AND tenant_id=? AND resource_id=?', job.kind, job.tenant_id, job.resource_id);
+      if (job.kind === 'application') {
+        const key = `${job.tenant_id}:${job.bot_id}`, ids = this.pendingApplicationCleanup.get(key);
+        ids?.delete(job.resource_id);
+        if (!ids?.size) this.pendingApplicationCleanup.delete(key);
+      }
+    } catch {
+      // Never persist or log provider errors: their details may contain tokens.
+      this.ctx.storage.sql.exec('UPDATE resource_cleanup_jobs SET not_before=? WHERE kind=? AND tenant_id=? AND resource_id=?', Date.now() + 30_000, job.kind, job.tenant_id, job.resource_id);
+    }
   }
 
   async recordLoginAttempt(input: LoginAuditInput): Promise<void> {
@@ -148,11 +433,20 @@ export class TenantRegistry extends DurableObject<Env> {
   async alarm(): Promise<void> {
     // A watchdog retains wake work if a hub is temporarily unavailable.
     await this.ctx.storage.setAlarm(Date.now() + 30_000);
-    await this.processWakeJobs();
+    let wakeFailed = false;
+    try { await this.processWakeJobs(); } catch { wakeFailed = true; }
+    await this.drainCleanup();
     this.loginAudit.cleanup();
-    const next = this.loginAudit.nextCleanupAt();
-    if (this.ctx.storage.sql.exec('SELECT 1 FROM tenant_wake_jobs LIMIT 1').toArray().length) await this.ctx.storage.setAlarm(Date.now() + 100);
-    else if (next !== null) await this.ctx.storage.setAlarm(next);
+    const auditNext = this.loginAudit.nextCleanupAt();
+    const cleanupNext = this.ctx.storage.sql.exec<{
+      next: number | null
+    }>('SELECT MIN(not_before) AS next FROM resource_cleanup_jobs').one().next;
+    const due = [auditNext, cleanupNext === null ? null : Math.max(Date.now() + 100, cleanupNext)].filter((value): value is number => value !== null);
+    const next = due.length ? Math.min(...due) : null;
+    if (this.ctx.storage.sql.exec('SELECT 1 FROM tenant_wake_jobs LIMIT 1').toArray().length) {
+      const wakeAt = Date.now() + (wakeFailed ? 30_000 : 100);
+      await this.ctx.storage.setAlarm(next === null ? wakeAt : Math.min(next, wakeAt));
+    } else if (next !== null) await this.ctx.storage.setAlarm(next);
     else await this.ctx.storage.deleteAlarm();
   }
 
@@ -162,7 +456,11 @@ export class TenantRegistry extends DurableObject<Env> {
   }
 
   private async processWakeJobs(): Promise<void> {
-    const job = this.ctx.storage.sql.exec<{tenant_id: string; cursor: string; version: number}>('SELECT tenant_id,cursor,version FROM tenant_wake_jobs ORDER BY tenant_id LIMIT 1').toArray()[0];
+    const job = this.ctx.storage.sql.exec<{
+      tenant_id: string;
+      cursor: string;
+      version: number
+    }>('SELECT tenant_id,cursor,version FROM tenant_wake_jobs ORDER BY tenant_id LIMIT 1').toArray()[0];
     if (!job) return;
     const ids = this.bots.ids(job.tenant_id, job.cursor).slice(0, 5);
     for (const id of ids) await this.wakeHub(this.stored(job.tenant_id), id);
@@ -187,6 +485,7 @@ export class TenantRegistry extends DurableObject<Env> {
   private publicTenant(tenant: StoredTenant): Tenant {
     return {
       id: tenant.id, name: tenant.name, enabled: tenant.enabled, isDefault: tenant.id === 'default',
+      hasInheritedAccess: !!tenant.fallbackAccess && (tenant.fallbackAccess.ipMode !== 'off' || tenant.fallbackAccess.countryMode !== 'off'),
       createdAt: tenant.createdAt, updatedAt: tenant.updatedAt, version: tenant.version,
       limits: {...tenant.limits}, botConfigured: !!this.token(tenant),
       botId: tenant.botId ?? tokenIdentity(this.token(tenant)), botUsername: tenant.botUsername,
@@ -210,10 +509,12 @@ export class TenantRegistry extends DurableObject<Env> {
   }
 
   private migrateDefaultBot(tenant: StoredTenant): void {
-    this.bots.migrate({tenantId: tenant.id, id: 'default', name: tenant.name, enabled: true,
+    this.bots.migrate({
+      tenantId: tenant.id, id: 'default', name: tenant.name, enabled: true,
       telegramId: tenant.botId ?? tokenIdentity(tenant.botToken ?? ''), username: tenant.botUsername,
       botToken: tenant.botToken, webhookSecret: tenant.webhookSecret,
-      createdAt: tenant.createdAt, updatedAt: tenant.updatedAt, version: tenant.version});
+      createdAt: tenant.createdAt, updatedAt: tenant.updatedAt, version: tenant.version
+    });
   }
 
   private storedBot(id: string, botId = 'default'): StoredBot {
@@ -281,6 +582,7 @@ export class TenantRegistry extends DurableObject<Env> {
     return {
       ...this.publicTenant(tenant), botConfigured: !!bot.botToken, botId: bot.telegramId, botUsername: bot.username,
       selectedBotId: bot.id, botEnabled: bot.enabled, botVersion: bot.version,
+      deletedApplicationIds: [...(this.pendingApplicationCleanup.get(`${id}:${botId}`) ?? [])],
       botToken: bot.botToken ?? '', webhookSecret: this.botSecret(bot), applicationRevision,
       ...(knownApplicationRevision === applicationRevision ? {} : {applications: this.applications.list(id, botId)})
     };
@@ -290,6 +592,7 @@ export class TenantRegistry extends DurableObject<Env> {
     const data = record(input);
     onlyKeys(data, ['id', 'name', 'limits']);
     const id = tenantId(data.id);
+    if (this.retired('tenant', id, id)) fail('RESOURCE_ID_RETIRED', 'This tenant ID was permanently retired.');
     if (id === 'default' || this.tenants.has(id)) fail('TENANT_EXISTS', 'Tenant ID is already in use.');
     if (this.tenants.size >= MAX_TENANTS) fail('INVALID_TENANT', 'A deployment supports at most 500 tenants.');
     const name = tenantName(data.name), limits = mergedLimits(data.limits, DEFAULT_TENANT_LIMITS);
@@ -315,7 +618,8 @@ export class TenantRegistry extends DurableObject<Env> {
 
   async updateTenant(id: string, input: TenantUpdate): Promise<Tenant> {
     const data = record(input);
-    onlyKeys(data, ['name', 'enabled', 'limits', 'expectedVersion']);
+    onlyKeys(data, ['name', 'enabled', 'limits', 'expectedVersion', 'clearInheritedAccess']);
+    if (data.clearInheritedAccess !== undefined && (data.clearInheritedAccess !== true || data.expectedVersion === undefined)) fail('INVALID_TENANT', 'Clearing inherited access requires an explicit reviewed version.');
     const current = this.stored(id);
     this.checkVersion(current, expectedVersion(data.expectedVersion));
     if (data.enabled !== undefined && typeof data.enabled !== 'boolean') fail('INVALID_TENANT', 'enabled must be a boolean.');
@@ -323,6 +627,7 @@ export class TenantRegistry extends DurableObject<Env> {
       name: data.name === undefined ? current.name : tenantName(data.name),
       enabled: data.enabled === undefined ? current.enabled : data.enabled as boolean,
       limits: mergedLimits(data.limits, current.limits),
+      fallbackAccess: data.clearInheritedAccess === true ? undefined : current.fallbackAccess,
     });
     this.commit(next);
     await this.wakeHub(next);
@@ -349,7 +654,9 @@ export class TenantRegistry extends DurableObject<Env> {
     const selectedBot = this.storedBot(tenantId, input.botId ?? 'default');
     const next = {...input, ...audience};
     if (audience.audienceMode === 'selected') await this.validateApplicationAudience(tenant, selectedBot.id, audience.audienceChatIds);
-    const result = await this.applications.create(tenantId, next);
+    const result = await this.applications.create(tenantId, next, () => {
+      this.storedBot(tenantId, selectedBot.id);
+    });
     this.statuses.delete(`${tenantId}:${result.application.botId}`);
     this.statusRequests.delete(`${tenantId}:${result.application.botId}`);
     await this.wakeHub(this.stored(tenantId), result.application.botId);
@@ -387,18 +694,33 @@ export class TenantRegistry extends DurableObject<Env> {
   }
 
   async verifyApplicationKey(tenantId: string, key: string): Promise<Application | null> {
-    if (!this.stored(tenantId).enabled) return null;
+    if (!this.tenants.get(tenantId)?.enabled) return null;
     const result = await this.applications.verifyKey(tenantId, key);
-    return this.stored(tenantId).enabled ? result : null;
+    return this.tenants.get(tenantId)?.enabled && result && this.bots.get(tenantId, result.botId) ? result : null;
   }
 
   private checkBotIdentity(bot: StoredBot, telegramId: string): void {
     if (bot.telegramId && bot.telegramId !== telegramId) fail('BOT_CHANGE_REQUIRES_NEW_BOT', 'Create a new bot entry when switching Telegram bot identity.');
     const owner = this.bots.identityOwner(telegramId);
-    if (owner && (owner.tenant_id !== bot.tenantId || owner.id !== bot.id)) fail('BOT_ALREADY_ASSIGNED', 'This Telegram bot is already assigned.');
+    if (owner && (owner.tenant_id !== bot.tenantId || owner.id !== bot.id)) {
+      const owningBot = this.bots.cleanupRecord(owner.tenant_id, owner.id);
+      const tenantRow = this.ctx.storage.sql.exec<{
+        body: string
+      }>('SELECT body FROM tenants WHERE id=?', owner.tenant_id).toArray()[0];
+      const owningTenant = this.tenants.get(owner.tenant_id) ?? (tenantRow ? JSON.parse(tenantRow.body) as StoredTenant : null);
+      fail('BOT_ALREADY_ASSIGNED', JSON.stringify({
+        tenantId: owner.tenant_id,
+        tenantName: owningTenant?.name ?? owner.tenant_id,
+        botId: owner.id,
+        botName: owningBot?.name ?? owner.id
+      }));
+    }
   }
 
-  private async validateBotToken(before: StoredBot, botToken: string): Promise<{telegramId: string; username: string | null}> {
+  private async validateBotToken(before: StoredBot, botToken: string): Promise<{
+    telegramId: string;
+    username: string | null
+  }> {
     if (typeof botToken !== 'string' || botToken.length > 512 || !/^[1-9][0-9]*:[A-Za-z0-9_-]{5,256}$/.test(botToken)) fail('INVALID_BOT_TOKEN', 'Provide a valid Telegram bot token.');
     const inferredId = tokenIdentity(botToken);
     if (!inferredId) fail('INVALID_BOT_TOKEN', 'Provide a valid Telegram bot token.');
@@ -426,7 +748,10 @@ export class TenantRegistry extends DurableObject<Env> {
       if (error instanceof Error && error.message.startsWith('INVALID_BOT_TOKEN:')) throw error;
       fail('TELEGRAM_UNAVAILABLE', 'Telegram could not validate the bot. Try again later.');
     }
-    return {telegramId: inferredId, username: typeof bot!.username === 'string' && /^[A-Za-z0-9_]{1,100}$/.test(bot!.username) ? bot!.username : null};
+    return {
+      telegramId: inferredId,
+      username: typeof bot!.username === 'string' && /^[A-Za-z0-9_]{1,100}$/.test(bot!.username) ? bot!.username : null
+    };
   }
 
   async listBots(id: string, page = 1, search = ''): Promise<Page<TelegramBot>> {
@@ -443,30 +768,38 @@ export class TenantRegistry extends DurableObject<Env> {
     return bot ? this.publicBot(bot) : null;
   }
 
-  async createBot(id: string, input: TelegramBotCreate): Promise<{bot: TelegramBot}> {
+  async createBot(id: string, input: TelegramBotCreate): Promise<{ bot: TelegramBot }> {
     const tenant = this.stored(id), data = record(input, 'INVALID_BOT');
     onlyKeys(data, ['id', 'name', 'botToken', 'enabled'], 'INVALID_BOT');
     if (typeof data.id !== 'string' || !/^[a-z0-9][a-z0-9_-]{1,47}$/.test(data.id)) fail('INVALID_BOT', 'Bot IDs must contain 2–48 lowercase URL-safe characters.');
     if (typeof data.name !== 'string' || !data.name.trim() || data.name.trim().length > 80) fail('INVALID_BOT', 'Bot names must contain 1–80 characters.');
     const botId = data.id, name = data.name.trim();
+    if (this.retired('bot', id, botId)) fail('RESOURCE_ID_RETIRED', 'This bot ID was permanently retired.');
     if (botId === 'default' || this.bots.get(id, botId)) fail('BOT_EXISTS', 'Bot ID is already in use.');
     if (data.enabled !== undefined && typeof data.enabled !== 'boolean') fail('INVALID_BOT', 'enabled must be a boolean.');
     const now = new Date().toISOString();
-    const proposed: StoredBot = {tenantId: id, id: botId, name, enabled: data.enabled !== false, telegramId: null,
-      username: null, botToken: null, webhookSecret: randomSecret(), createdAt: now, updatedAt: now, version: 1};
+    const proposed: StoredBot = {
+      tenantId: id, id: botId, name, enabled: data.enabled !== false, telegramId: null,
+      username: null, botToken: null, webhookSecret: randomSecret(), createdAt: now, updatedAt: now, version: 1
+    };
     const identity = await this.validateBotToken(proposed, data.botToken as string);
     // Seed persisted pre-multi-bot usage once so adding a bot cannot reset tenant limits.
     const existing = this.ctx.storage.sql.exec('SELECT 1 FROM tenant_bot_usage WHERE tenant_id = ? AND bot_id = ?', id, 'default').toArray().length;
-    if (!existing) {
+    if (!existing && this.bots.get(id, 'default')) {
       const hub = this.env.HUB.getByName(hubName(id));
       await hub.initializeTenant(id, tenant.name);
       const usage = await hub.getUsage();
-      this.ctx.storage.sql.exec('INSERT OR IGNORE INTO tenant_bot_usage(tenant_id,bot_id,revision,body) VALUES(?,?,0,?)', id, 'default', JSON.stringify(usage));
+      this.stored(id);
+      if (this.bots.get(id, 'default')) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO tenant_bot_usage(tenant_id,bot_id,revision,body) VALUES(?,?,0,?)', id, 'default', JSON.stringify(usage));
     }
+    if (this.retired('bot', id, botId)) fail('RESOURCE_ID_RETIRED', 'This bot ID was permanently retired.');
+    this.stored(id);
     if (this.bots.get(id, botId)) fail('BOT_EXISTS', 'Bot ID is already in use.');
     this.checkBotIdentity(proposed, identity.telegramId);
     const tenantVersion = this.stored(id).version;
     await this.syncBotCommands(data.botToken as string);
+    if (this.retired('bot', id, botId)) fail('RESOURCE_ID_RETIRED', 'This bot ID was permanently retired.');
+    this.stored(id);
     if (this.bots.get(id, botId)) fail('BOT_EXISTS', 'Bot ID is already in use.');
     this.checkBotIdentity(proposed, identity.telegramId);
     this.checkVersion(this.stored(id), tenantVersion);
@@ -496,10 +829,12 @@ export class TenantRegistry extends DurableObject<Env> {
       this.checkVersion(this.stored(id), tenantVersion);
     }
     const currentSecret = this.botSecret(current);
-    const bot: StoredBot = {...current, ...identity, name, enabled: data.enabled === undefined ? current.enabled : data.enabled as boolean,
+    const bot: StoredBot = {
+      ...current, ...identity, name, enabled: data.enabled === undefined ? current.enabled : data.enabled as boolean,
       botToken: data.botToken === undefined ? current.botToken : data.botToken as string,
       webhookSecret: data.botToken === undefined ? current.webhookSecret : /^[A-Za-z0-9_-]{1,256}$/.test(currentSecret) ? currentSecret : randomSecret(),
-      version: current.version + 1, updatedAt: new Date().toISOString()};
+      version: current.version + 1, updatedAt: new Date().toISOString()
+    };
     this.persistBot(bot);
     await this.wakeHub(this.stored(id), botId);
     return this.publicBot(bot);
@@ -510,9 +845,10 @@ export class TenantRegistry extends DurableObject<Env> {
     this.checkVersion(before, expectedVersion(version));
     const bot = this.storedBot(id);
     // Keep the legacy endpoint's tenant version concurrency contract.
-    let identity: {telegramId: string; username: string | null};
-    try { identity = await this.validateBotToken(bot, botToken); }
-    catch (error) {
+    let identity: { telegramId: string; username: string | null };
+    try {
+      identity = await this.validateBotToken(bot, botToken);
+    } catch (error) {
       if (error instanceof Error && error.message.startsWith('BOT_CHANGE_REQUIRES_NEW_BOT:')) fail('BOT_CHANGE_REQUIRES_NEW_TENANT', 'Create a new bot entry when switching Telegram bot identity.');
       throw error;
     }
@@ -524,7 +860,13 @@ export class TenantRegistry extends DurableObject<Env> {
     this.checkBotVersion(this.storedBot(id), bot.version);
     this.checkBotIdentity(bot, identity.telegramId);
     const secret = this.botSecret(bot);
-    this.persistBot({...bot, ...identity, botToken, webhookSecret: /^[A-Za-z0-9_-]{1,256}$/.test(secret) ? secret : randomSecret(), version: bot.version + 1, updatedAt: new Date().toISOString()});
+    this.persistBot({
+      ...bot, ...identity,
+      botToken,
+      webhookSecret: /^[A-Za-z0-9_-]{1,256}$/.test(secret) ? secret : randomSecret(),
+      version: bot.version + 1,
+      updatedAt: new Date().toISOString()
+    });
     await this.wakeHub(this.stored(id), 'default');
     return this.publicTenant(this.stored(id));
   }
@@ -598,31 +940,46 @@ export class TenantRegistry extends DurableObject<Env> {
 
   private quotaTotals(id: string, excludingBot?: string): TenantUsage {
     const day = new Date(Date.now()).toISOString().slice(0, 10);
-    const totals = this.ctx.storage.sql.exec<{notifications: number; subscribers: number; pending: number}>(`
-      SELECT COALESCE(SUM(CASE WHEN json_extract(body,'$.day') = ? THEN json_extract(body,'$.notificationsToday') ELSE 0 END),0) AS notifications,
-        COALESCE(SUM(json_extract(body,'$.activeSubscribers')),0) AS subscribers,
-        COALESCE(SUM(json_extract(body,'$.pendingDeliveries')),0) AS pending
-      FROM tenant_bot_usage WHERE tenant_id = ? AND (? IS NULL OR bot_id != ?)`, day, id, excludingBot ?? null, excludingBot ?? null).one();
-    return {day, notificationsToday: totals.notifications, activeSubscribers: totals.subscribers, pendingDeliveries: totals.pending};
+    const totals = this.ctx.storage.sql.exec<{ notifications: number; subscribers: number; pending: number }>(`
+        SELECT COALESCE(SUM(CASE
+                                WHEN json_extract(body, '$.day') = ? THEN json_extract(body, '$.notificationsToday')
+                                ELSE 0 END), 0) AS                            notifications,
+               COALESCE(SUM(json_extract(body, '$.activeSubscribers')), 0) AS subscribers,
+               COALESCE(SUM(json_extract(body, '$.pendingDeliveries')), 0) AS pending
+        FROM tenant_bot_usage
+        WHERE tenant_id = ?
+          AND (? IS NULL OR bot_id != ?)`, day, id, excludingBot ?? null, excludingBot ?? null).one();
+    return {
+      day,
+      notificationsToday: totals.notifications,
+      activeSubscribers: totals.subscribers,
+      pendingDeliveries: totals.pending
+    };
   }
 
   private storeUsage(id: string, botId: string, revision: number, usage: TenantUsage): void {
-    this.ctx.storage.sql.exec(`INSERT INTO tenant_bot_usage(tenant_id,bot_id,revision,body) VALUES(?,?,?,?)
-      ON CONFLICT(tenant_id,bot_id) DO UPDATE SET revision=excluded.revision,body=excluded.body`, id, botId, revision, JSON.stringify(usage));
+    this.ctx.storage.sql.exec(`INSERT INTO tenant_bot_usage(tenant_id, bot_id, revision, body)
+                               VALUES (?, ?, ?, ?) ON CONFLICT(tenant_id,bot_id) DO
+    UPDATE SET revision=excluded.revision,body=excluded.body`, id, botId, revision, JSON.stringify(usage));
   }
 
   async getTenantUsage(id: string): Promise<TenantUsage> {
     const tenant = this.stored(id);
-    if (!this.ctx.storage.sql.exec('SELECT 1 FROM tenant_bot_usage WHERE tenant_id = ? AND bot_id = ?', id, 'default').toArray().length) {
+    if (this.bots.get(id, 'default') && !this.ctx.storage.sql.exec('SELECT 1 FROM tenant_bot_usage WHERE tenant_id = ? AND bot_id = ?', id, 'default').toArray().length) {
       const hub = this.env.HUB.getByName(hubName(id));
       await hub.initializeTenant(id, tenant.name);
       const usage = await hub.getUsage();
-      this.ctx.storage.sql.exec('INSERT OR IGNORE INTO tenant_bot_usage(tenant_id,bot_id,revision,body) VALUES(?,?,0,?)', id, 'default', JSON.stringify(usage));
+      this.stored(id);
+      if (this.bots.get(id, 'default')) this.ctx.storage.sql.exec('INSERT OR IGNORE INTO tenant_bot_usage(tenant_id,bot_id,revision,body) VALUES(?,?,0,?)', id, 'default', JSON.stringify(usage));
     }
     return this.quotaTotals(id);
   }
 
-  reserveQuota(id: string, botId: string, revision: number, actual: TenantUsage, requested: {notifications: number; subscribers: number; pending: number}): {maxPendingDeliveries: number} {
+  reserveQuota(id: string, botId: string, revision: number, actual: TenantUsage, requested: {
+    notifications: number;
+    subscribers: number;
+    pending: number
+  }): { maxPendingDeliveries: number } {
     const tenant = this.stored(id), bot = this.storedBot(id, botId);
     this.validateUsage(revision, actual);
     if (!requested || [requested.notifications, requested.subscribers, requested.pending].some(value => !Number.isSafeInteger(value) || value < 0)) fail('INVALID_QUOTA', 'Invalid tenant quota reservation.');
@@ -630,7 +987,9 @@ export class TenantRegistry extends DurableObject<Env> {
       if (!tenant.enabled) fail('TENANT_DISABLED', 'Tenant is disabled.');
       if (!bot.enabled) fail('BOT_DISABLED', 'Telegram bot is disabled.');
     }
-    const old = this.ctx.storage.sql.exec<{revision: number}>('SELECT revision FROM tenant_bot_usage WHERE tenant_id = ? AND bot_id = ?', id, botId).toArray()[0];
+    const old = this.ctx.storage.sql.exec<{
+      revision: number
+    }>('SELECT revision FROM tenant_bot_usage WHERE tenant_id = ? AND bot_id = ?', id, botId).toArray()[0];
     if (old && old.revision >= revision) fail('STALE_QUOTA', 'A newer quota snapshot already exists.');
     const totals = this.quotaTotals(id, botId);
     const notificationsToday = actual.day === totals.day ? actual.notificationsToday : 0;
@@ -638,21 +997,25 @@ export class TenantRegistry extends DurableObject<Env> {
     if (requested.subscribers > 0 && totals.activeSubscribers + actual.activeSubscribers + requested.subscribers > tenant.limits.maxSubscribers) fail('SUBSCRIBER_LIMIT', 'Tenant subscriber limit reached across all bots.');
     const headroom = tenant.enabled && bot.enabled ? Math.max(0, tenant.limits.maxPendingDeliveries - totals.pendingDeliveries - actual.pendingDeliveries) : 0;
     const maxPendingDeliveries = actual.pendingDeliveries + Math.min(requested.pending, headroom);
-    this.storeUsage(id, botId, revision, {day: totals.day, notificationsToday: notificationsToday + requested.notifications,
-      activeSubscribers: actual.activeSubscribers + requested.subscribers, pendingDeliveries: maxPendingDeliveries});
+    this.storeUsage(id, botId, revision, {
+      day: totals.day, notificationsToday: notificationsToday + requested.notifications,
+      activeSubscribers: actual.activeSubscribers + requested.subscribers, pendingDeliveries: maxPendingDeliveries
+    });
     return {maxPendingDeliveries};
   }
 
   reportQuotaUsage(id: string, botId: string, revision: number, actual: TenantUsage): void {
     this.storedBot(id, botId);
     this.validateUsage(revision, actual);
-    const old = this.ctx.storage.sql.exec<{revision: number}>('SELECT revision FROM tenant_bot_usage WHERE tenant_id = ? AND bot_id = ?', id, botId).toArray()[0];
+    const old = this.ctx.storage.sql.exec<{
+      revision: number
+    }>('SELECT revision FROM tenant_bot_usage WHERE tenant_id = ? AND bot_id = ?', id, botId).toArray()[0];
     if (old && old.revision >= revision) return;
     this.storeUsage(id, botId, revision, actual);
   }
 
   /** Sync is explicit or configuration-time; normal notification and runtime reads never call Telegram. */
-  async registerBotCommands(id: string, botId = 'default'): Promise<{ok: true; commands: TelegramBotCommand[]}> {
+  async registerBotCommands(id: string, botId = 'default'): Promise<{ ok: true; commands: TelegramBotCommand[] }> {
     const tenant = this.stored(id), before = this.storedBot(id, botId);
     if (!before.botToken) fail('BOT_NOT_CONFIGURED', 'Configure this Telegram bot before registering its commands.');
     await this.syncBotCommands(before.botToken);
@@ -686,8 +1049,11 @@ export class TenantRegistry extends DurableObject<Env> {
     const token = before.botToken, secret = this.botSecret(before);
     if (!token || !/^[A-Za-z0-9_-]{1,256}$/.test(secret)) fail('BOT_NOT_CONFIGURED', 'Configure the bot and webhook secret first.');
     let url: URL;
-    try { url = new URL(value); }
-    catch { fail(invalidCode, 'A public HTTPS webhook URL is required.'); }
+    try {
+      url = new URL(value);
+    } catch {
+      fail(invalidCode, 'A public HTTPS webhook URL is required.');
+    }
     const paths = [`/telegram/${id}/bots/${selectedBotId}/webhook`, ...(selectedBotId === 'default' ? [`/telegram/${id}/webhook`, ...(id === 'default' ? ['/telegram/webhook'] : [])] : [])];
     if (url!.protocol !== 'https:' || url!.username || url!.password || url!.hash || url!.search || !paths.includes(url!.pathname)) fail(invalidCode, 'Use this bot’s public HTTPS webhook URL.');
     await this.syncBotCommands(token);
@@ -696,11 +1062,15 @@ export class TenantRegistry extends DurableObject<Env> {
       try {
         this.checkVersion(this.stored(id), tenant.version);
         this.checkBotVersion(this.storedBot(id, selectedBotId), before.version);
-        const result = await telegramCall<boolean>(token, 'setWebhook', {url: url!.toString(), secret_token: secret,
-          allowed_updates: ['message', 'my_chat_member', 'callback_query'], drop_pending_updates: false});
+        const result = await telegramCall<boolean>(token, 'setWebhook', {
+          url: url!.toString(), secret_token: secret,
+          allowed_updates: ['message', 'my_chat_member', 'callback_query'], drop_pending_updates: false
+        });
         if (result.result !== true) fail('TELEGRAM_UNAVAILABLE', 'Telegram did not confirm webhook registration.');
         this.persistBot({...before, version: before.version + 1, updatedAt: new Date().toISOString()});
-      } catch { registrationFailed = true; }
+      } catch {
+        registrationFailed = true;
+      }
     });
     if (registrationFailed) fail('TELEGRAM_UNAVAILABLE', 'Telegram could not register the webhook. Check configuration and retry.');
     await this.wakeHub(this.stored(id), selectedBotId);

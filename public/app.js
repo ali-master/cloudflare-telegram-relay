@@ -211,9 +211,13 @@ function staleResponse() {
   return error;
 }
 
-function selectedBot() { return state.bot; }
+function selectedBot() {
+  return state.bot;
+}
 
-function botWebhookUrl() { return `${location.origin}/telegram/${encodeURIComponent(state.tenantId)}/bots/${encodeURIComponent(state.botId)}/webhook`; }
+function botWebhookUrl() {
+  return `${location.origin}/telegram/${encodeURIComponent(state.tenantId)}/bots/${encodeURIComponent(state.botId)}/webhook`;
+}
 
 function selectedTenant() {
   return state.tenants.find(tenant => tenant.id === state.tenantId) || null;
@@ -328,16 +332,85 @@ async function switchTenant(id) {
   clearTenantData();
   window.RelayBots.clear();
   renderTenantSelector();
-  const result = await api(tenantPath('bots/default'));
-  state.bot = result.bot;
+  await selectAvailableBot();
+}
+
+/** Select an existing connection, including spaces whose original default bot was removed. */
+async function selectAvailableBot() {
+  const {items} = await api(tenantPath('bots?page=1'));
+  state.bot = items.find(bot => bot.id === 'default') || items[0] || null;
+  state.botId = state.bot?.id || null;
   window.RelayBots.renderScope();
+  updateApiExample();
+  if (!state.bot) {
+    renderEmptyBotScope();
+    changeTab('bots');
+    return;
+  }
   await refresh({initial: true});
+}
+
+/** Keep tenant administration available while a space has no Telegram connections. */
+function renderEmptyBotScope() {
+  text('#connection-title', 'هنوز باتی به این فضا متصل نیست');
+  text('#connection-detail', 'از بخش بات‌های تلگرام یک اتصال تازه بسازید.');
+  text('#last-refresh', 'فضا آمادهٔ افزودن بات است');
+  $('#compose-app').replaceChildren(node('option', '', 'ابتدا یک بات اضافه کنید'));
+  $('#compose-app option').value = '';
+  syncSelects();
+  window.RelayBots.renderScope();
+}
+
+/** Remove stale selections and reload authoritative lists after an accepted deletion. */
+async function afterResourceDelete(target) {
+  state.epoch++;
+  state.refreshPending = false;
+  state.composeKey = null;
+  state.composeBody = null;
+  if (target.kind === 'tenant') {
+    state.tenants = state.tenants.filter(tenant => tenant.id !== target.entity.id);
+    if (state.tenantId === target.entity.id) {
+      state.tenantId = null;
+      state.botId = null;
+      state.bot = null;
+      clearTenantData();
+      window.RelayBots.clear();
+    }
+    renderTenantSelector();
+    renderTenants();
+    await loadTenants();
+    changeTab('tenants');
+    return;
+  }
+  if (target.kind === 'bot') {
+    await loadTenants();
+    if (state.botId === target.entity.id) {
+      state.bot = null;
+      state.botId = null;
+      clearTenantData();
+      window.RelayBots.clear();
+      await selectAvailableBot();
+    }
+    await window.RelayBots.load();
+    return;
+  }
+  state.applications = state.applications.filter(application => application.id !== target.entity.id);
+  renderApplications();
+  await loadApplications();
+  await refresh({manual: true});
 }
 
 async function switchBot(bot) {
   if (!bot || !state.authenticated) return;
-  if (state.activeWrites) { toast('تا پایان ذخیره یا ارسال، تغییر بات امکان‌پذیر نیست.', true); return; }
-  if (bot.id === state.botId) { state.bot = bot; window.RelayBots.renderScope(); return; }
+  if (state.activeWrites) {
+    toast('تا پایان ذخیره یا ارسال، تغییر بات امکان‌پذیر نیست.', true);
+    return;
+  }
+  if (bot.id === state.botId) {
+    state.bot = bot;
+    window.RelayBots.renderScope();
+    return;
+  }
   if (!window.RelayBots.canLeave(() => handleLoad(() => switchBot(bot))) || !window.RelayAutomation.canLeave(() => handleLoad(() => switchBot(bot)))) return;
   state.epoch++;
   state.botId = bot.id;
@@ -357,6 +430,14 @@ async function loadTenants() {
   if (!state.tenantId || !state.tenants.some(tenant => tenant.id === state.tenantId)) {
     const fallback = state.tenants.find(tenant => tenant.isDefault) || state.tenants[0];
     if (fallback) await switchTenant(fallback.id);
+    else {
+      state.tenantId = null;
+      state.botId = null;
+      state.bot = null;
+      clearTenantData();
+      window.RelayBots.clear();
+      changeTab('tenants');
+    }
   }
 }
 
@@ -408,7 +489,14 @@ function renderTenants() {
       if (state.tenantId !== tenant.id) await switchTenant(tenant.id);
       if (state.tenantId === tenant.id) changeTab('api');
     }));
-    buttons.append(select, guide, edit);
+    const remove = node('button', 'icon-button resource-delete-action');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `حذف فضای ${tenant.name}`);
+    remove.title = tenant.isDefault ? 'فضای پیش‌فرض سامانه قابل حذف نیست.' : 'حذف فضا و داده‌های وابسته';
+    remove.disabled = tenant.isDefault || state.activeWrites > 0;
+    remove.append(icon('trash'));
+    remove.addEventListener('click', () => window.RelayDeletion.open('tenant', tenant));
+    buttons.append(select, guide, edit, remove);
     actions.append(buttons);
     row.append(cell, status, bot, node('td', '', count(tenant.limits.notificationsPerDay)), actions);
     tbody.append(row);
@@ -444,6 +532,8 @@ function openTenantEditor(id = null) {
   $('#tenant-id').readOnly = Boolean(tenant);
   $('#tenant-enabled').checked = tenant ? tenant.enabled : true;
   $('#tenant-enabled-row').hidden = !tenant;
+  $('#tenant-inherited-access').hidden = !tenant?.hasInheritedAccess;
+  $('#tenant-clear-inherited-access').checked = false;
   for (const [key, id] of Object.entries({
     requestsPerMinute: '#limit-requests',
     notificationsPerDay: '#limit-notifications',
@@ -525,7 +615,16 @@ function renderApplications() {
     const edit = node('button', 'button secondary small-button', 'مدیریت و کلید');
     edit.type = 'button';
     edit.addEventListener('click', () => openApplicationEditor(application.id));
-    actions.append(edit);
+    const remove = node('button', 'icon-button resource-delete-action');
+    remove.type = 'button';
+    remove.title = 'حذف اپلیکیشن';
+    remove.setAttribute('aria-label', `حذف اپلیکیشن ${application.name}`);
+    remove.disabled = state.activeWrites > 0;
+    remove.append(icon('trash'));
+    remove.addEventListener('click', () => window.RelayDeletion.open('application', application));
+    const buttons = node('div', 'resource-row-actions');
+    buttons.append(edit, remove);
+    actions.append(buttons);
     row.append(cell, status, audience, key, timeCell(application.createdAt), actions);
     tbody.append(row);
   }
@@ -533,8 +632,8 @@ function renderApplications() {
 }
 
 function openApplicationEditor(id = null) {
-  if (!state.tenantId || state.activeWrites) {
-    toast('ابتدا یک فضا انتخاب کنید و منتظر پایان عملیات بمانید.', true);
+  if (!state.tenantId || !state.bot || state.activeWrites) {
+    toast('ابتدا یک بات انتخاب کنید و منتظر پایان عملیات بمانید.', true);
     return;
   }
   const application = id ? state.applications.find(item => item.id === id) : null;
@@ -803,6 +902,7 @@ async function api(path, options = {}) {
   if (scoped) path = path.replace('/api/admin/', `${tenantPath('')}/`);
   const botScoped = /^\/api\/admin\/tenants\/[^/]+\/(overview|settings|status|context|subscribers|notifications|webhook|usage|applications|automation|incidents)(?=\/|\?|$)/.test(path);
   if (botScoped) {
+    if (!state.botId) throw new Error('این فضا هنوز باتی ندارد. ابتدا یک بات اضافه کنید.');
     const url = new URL(path, location.origin);
     if (!url.searchParams.has('botId')) url.searchParams.set('botId', state.botId);
     path = url.pathname + url.search;
@@ -844,6 +944,7 @@ async function api(path, options = {}) {
       const error = new Error(data.error?.message || `درخواست ناموفق بود (${response.status}).`);
       error.code = data.error?.code;
       error.status = response.status;
+      error.owner = data.error?.owner;
       throw error;
     }
     return data;
@@ -1542,13 +1643,24 @@ async function refresh({initial = false, manual = false} = {}) {
     return;
   }
   if (!state.authenticated || !state.tenantId || state.refreshPending) return;
+  if (!state.bot) {
+    if (manual) await handleLoad(loadTenants);
+    if (state.tab === 'bots') await handleLoad(() => window.RelayBots.load());
+    return;
+  }
   const epoch = state.epoch;
   state.refreshPending = true;
   $('#refresh').classList.add('spinning');
   $('#refresh').disabled = true;
   try {
     const tasks = [];
-    if (!initial) tasks.push(api(tenantPath(`bots/${encodeURIComponent(state.botId)}`)).then(result => { state.bot = result.bot; window.RelayBots.renderScope(); updateApiExample(); renderApplications(); if (state.status) renderStatus(state.status); }));
+    if (!initial) tasks.push(api(tenantPath(`bots/${encodeURIComponent(state.botId)}`)).then(result => {
+      state.bot = result.bot;
+      window.RelayBots.renderScope();
+      updateApiExample();
+      renderApplications();
+      if (state.status) renderStatus(state.status);
+    }));
     if (!initial) tasks.push(api(tenantPath('')).then(result => {
       if (state.authenticated && selectedTenant()?.version !== result.tenant.version) updateTenant(result.tenant);
     }));
@@ -1702,6 +1814,7 @@ async function loadLoginAudit(reset = false) {
 
 function changeTab(tab, focus = false) {
   if (!Object.hasOwn(titles, tab)) tab = 'overview';
+  if (state.authenticated && state.tenantId && !state.bot && !['bots', 'tenants', 'login-audit'].includes(tab)) tab = 'bots';
   if (tab !== state.tab && (!window.RelayBots.canLeave(() => changeTab(tab, focus)) || !window.RelayAutomation.canLeave(() => changeTab(tab, focus)))) return;
   state.tab = tab;
   $$('.nav-item[role=tab]').forEach(button => {
@@ -1802,8 +1915,8 @@ async function showApp() {
 }
 
 function openComposer() {
-  if (!state.tenantId) {
-    toast('ابتدا یک فضای اعلان انتخاب کنید.', true);
+  if (!state.tenantId || !state.bot) {
+    toast('ابتدا یک بات در فضای اعلان انتخاب کنید.', true);
     return;
   }
   showError('#compose-error', '');
@@ -1906,7 +2019,8 @@ $('#tenant-form').addEventListener('submit', async event => {
   const input = {
     name: String(form.get('name')).trim(), limits, ...(tenantId ? {
       enabled: form.has('enabled'),
-      expectedVersion: state.editTenantVersion
+      expectedVersion: state.editTenantVersion,
+      ...(form.has('clearInheritedAccess') ? {clearInheritedAccess: true} : {})
     } : {id: String(form.get('id')).trim()})
   };
   const button = $('#save-tenant');
@@ -1926,7 +2040,7 @@ $('#tenant-form').addEventListener('submit', async event => {
       toast('فضا ساخته شد؛ بات‌های آن را اضافه کنید، سپس اپلیکیشن بسازید.');
     } else {
       if (tenantId === state.tenantId) await refresh({manual: true});
-      toast('تنظیمات فضا ذخیره شد.');
+      toast(input.clearInheritedAccess ? 'تنظیمات ذخیره شد و محدودیت‌های مشترک بات پیش‌فرض برداشته شدند.' : 'تنظیمات فضا ذخیره شد.');
     }
   } catch (error) {
     if (!error.stale) showError('#tenant-form-error', error.message);
@@ -2199,6 +2313,7 @@ $$('[data-go-history]').forEach(button => button.addEventListener('click', () =>
 $$('[data-compose]').forEach(button => button.addEventListener('click', openComposer));
 
 function requestDialogClose(dialog) {
+  if (!window.RelayDeletion.canClose(dialog)) return;
   if (!window.RelayBots.canClose(dialog) || !window.RelayAutomation.canClose(dialog)) return;
   if (dialog.id === 'subscriber-profile-dialog' && subscriberEditor.saving || dialog.id === 'application-dialog' && applicationAudience.saving) return;
   dialog.close();
@@ -2282,7 +2397,10 @@ $('#register-webhook').addEventListener('click', async () => {
   const button = $('#register-webhook');
   busy(button, true);
   try {
-    await api(tenantPath(`bots/${encodeURIComponent(state.botId)}/webhook`), {method: 'POST', body: JSON.stringify({url: botWebhookUrl()})});
+    await api(tenantPath(`bots/${encodeURIComponent(state.botId)}/webhook`), {
+      method: 'POST',
+      body: JSON.stringify({url: botWebhookUrl()})
+    });
     renderStatus(await api('/api/admin/status'));
     toast('وب‌هوک بات ثبت شد.');
   } catch (error) {
@@ -2407,9 +2525,60 @@ function updateApiExample() {
   text('#api-status-example', statusExample);
 }
 
-window.RelayBots.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects, selectedTenant, switchBot, changeTab, updateApiExample, renderStatus, renderApplications, renderSettings});
+window.RelayDeletion.init({
+  $,
+  state,
+  node,
+  icon,
+  count,
+  showError,
+  toast,
+  api,
+  tenantPath,
+  selectedTenant,
+  afterDelete: afterResourceDelete,
+  canLeave: action => window.RelayBots.canLeave(action) && window.RelayAutomation.canLeave(action)
+});
+window.RelayBots.init({
+  $,
+  state,
+  node,
+  icon,
+  count,
+  showError,
+  toast,
+  api,
+  tenantPath,
+  dateText,
+  loading,
+  empty,
+  renderPagination,
+  syncSelects,
+  selectedTenant,
+  switchBot,
+  changeTab,
+  updateApiExample,
+  renderStatus,
+  renderApplications,
+  renderSettings
+});
 window.RelayBotCommands.init({$, state, node, count, busy, toast, api, tenantPath});
-window.RelayAutomation.init({$, state, node, icon, count, showError, toast, api, tenantPath, dateText, loading, empty, renderPagination, syncSelects});
+window.RelayAutomation.init({
+  $,
+  state,
+  node,
+  icon,
+  count,
+  showError,
+  toast,
+  api,
+  tenantPath,
+  dateText,
+  loading,
+  empty,
+  renderPagination,
+  syncSelects
+});
 updateApiExample();
 $('#api-content-format').addEventListener('change', updateApiExample);
 for (const [selector, getExample] of [['#copy-example', () => curlExample], ['#copy-status-example', () => statusExample]]) {

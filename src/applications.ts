@@ -29,6 +29,40 @@ export class ApplicationStore {
   private cache = new Map<string, Map<string, StoredApplication>>();
 
   constructor(private sql: SqlStorage) {
+    sql.exec(`CREATE TABLE IF NOT EXISTS resource_tombstones
+    (
+        kind
+        TEXT
+        NOT
+        NULL,
+        tenant_id
+        TEXT
+        NOT
+        NULL,
+        resource_id
+        TEXT
+        NOT
+        NULL,
+        bot_id
+        TEXT
+        NOT
+        NULL,
+        version
+        INTEGER
+        NOT
+        NULL,
+        deleted_at
+        TEXT
+        NOT
+        NULL,
+        PRIMARY
+        KEY
+              (
+        kind,
+        tenant_id,
+        resource_id
+              )
+        )`);
     sql.exec(`CREATE TABLE IF NOT EXISTS tenant_applications
     (
         tenant_id
@@ -105,7 +139,10 @@ export class ApplicationStore {
     return application ? this.public(application) : null;
   }
 
-  async create(tenantId: string, input: ApplicationCreate): Promise<{ application: Application; apiKey: string }> {
+  async create(tenantId: string, input: ApplicationCreate, authorize?: () => void): Promise<{
+    application: Application;
+    apiKey: string
+  }> {
     if (!input || !validId(input.id) || !validName(input.name)) return fail('INVALID_APPLICATION');
     const audience = applicationAudience(input)!;
     const botId = input.botId ?? 'default';
@@ -113,6 +150,8 @@ export class ApplicationStore {
     if (input.showInDirectory !== undefined && typeof input.showInDirectory !== 'boolean') return fail('INVALID_APPLICATION');
     const id = input.id, name = input.name.trim(), showInDirectory = input.showInDirectory ?? true;
     const apiKey = newKey(), keyHash = await digest(apiKey);
+    authorize?.();
+    if (this.sql.exec("SELECT 1 FROM resource_tombstones WHERE kind = 'application' AND tenant_id = ? AND resource_id = ?", tenantId, id).toArray().length) return fail('RESOURCE_ID_RETIRED');
     const rows = this.rows(tenantId);
     if (rows.has(id)) return fail('APPLICATION_EXISTS');
     if (rows.size >= 100) return fail('APPLICATION_LIMIT');
@@ -164,6 +203,12 @@ export class ApplicationStore {
     this.persist(tenantId, application);
     this.rows(tenantId).set(id, application);
     return {application: this.public(application), apiKey};
+  }
+
+  /** Revoke an application's credential and remove its registry metadata atomically. */
+  remove(tenantId: string, id: string): void {
+    this.sql.exec('DELETE FROM tenant_applications WHERE tenant_id = ? AND id = ?', tenantId, id);
+    this.cache.get(tenantId)?.delete(id);
   }
 
   async verifyKey(tenantId: string, key: string): Promise<Application | null> {

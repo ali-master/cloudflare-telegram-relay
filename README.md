@@ -84,6 +84,15 @@ On Cloudflare, change the key with `npx wrangler secret put API_KEY`, or open **
 
 Repeat for as many bots as you need; the relay imposes no bot-count cap. A Telegram bot can be connected only once across the system. Telegram webhooks need public HTTPS; localhost cannot receive Telegram updates.
 
+If a token is already connected, the dashboard names the tenant and bot that own
+it. Tenant, bot and application entries also have **Delete** actions with an
+exact-ID confirmation. Deletion revokes access and removes dependent data and
+queued work; disabling remains available for a reversible pause. The system
+tenant `default` is protected, but its bots can be deleted. Deleted record IDs
+cannot be reused. Cleanup retries durably, and deleting a relay connection does
+not delete the Telegram bot account. See [deletion and ownership conflicts](docs/multi-bot.md#delete-a-tenant-bot-or-application)
+for the API, cleanup status and in-flight delivery limits.
+
 Disabling a bot rejects new notifications for **all its applications** with HTTP **409 `BOT_DISABLED`**, including Grafana, Alertmanager, and dashboard sends. Its queued messages stay paused and resume after re-enabling, subject to current permissions and retention. Requests already in flight to Telegram may finish. Other bots keep working.
 
 Existing deployments keep their bot, applications, subscribers, and queues under **default** automatically. No new environment variable or Cloudflare binding is required. See [multi-bot setup and API examples](docs/multi-bot.md).

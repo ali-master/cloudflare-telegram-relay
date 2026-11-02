@@ -1190,7 +1190,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
+          description: "APPLICATION_EXISTS when the ID is already used, or RESOURCE_ID_RETIRED when that ID was deleted. Deleted application IDs cannot be reused within the tenant."
           content:
             "application/json":
               schema:
@@ -1293,6 +1293,111 @@ paths:
           "application/json":
             schema:
               "$ref": "#/components/schemas/ApplicationUpdate"
+    delete:
+      operationId: deleteApplication
+      summary: Delete an application in the default tenant and revoke its key
+      description: >-
+        Requires the latest resource version. Deletion revokes access immediately;
+        cleanupPending reports whether durable background cleanup remains. Deleted
+        IDs remain reserved permanently in their original scope. A request already
+        sent to Telegram can still finish; delivered messages are not recalled.
+      tags: [ Administration ]
+      security:
+        - adminSession: [ ]
+        - localAdminSession: [ ]
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          description: Application ID in the default tenant.
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$'
+        - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceDelete'
+      responses:
+        '200':
+          description: Resource removed from active use; remaining cleanup is retried durably.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceDeletionResult'
+        '400':
+          description: INVALID_DELETION for a missing or invalid expectedVersion or unsupported fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Tenant, bot, or application was not found in the requested scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+    get:
+      operationId: getApplication
+      summary: Read public application metadata and its current version
+      description: Returns only the application in the requested tenant and selected bot scope; never returns its API key.
+      tags: [ Administration ]
+      security:
+        - adminSession: [ ]
+        - localAdminSession: [ ]
+      parameters:
+        - name: applicationId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$'
+      responses:
+        '200':
+          description: Public application metadata including its version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  application:
+                    $ref: '#/components/schemas/Application'
+                required: [ application ]
+                additionalProperties: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Tenant, selected bot, or application was not found in the requested scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
   "/api/admin/applications/{applicationId}/rotate-key":
     parameters:
       - $ref: '#/components/parameters/BotScope'
@@ -1591,7 +1696,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
+          description: "APPLICATION_EXISTS when the ID is already used, or RESOURCE_ID_RETIRED when that ID was deleted. Deleted application IDs cannot be reused within the tenant."
           content:
             "application/json":
               schema:
@@ -1708,6 +1813,124 @@ paths:
           "application/json":
             schema:
               "$ref": "#/components/schemas/ApplicationUpdate"
+    delete:
+      operationId: deleteApplicationForTenant
+      summary: Delete an application and revoke its API key
+      description: >-
+        Requires the latest resource version. Deletion revokes access immediately;
+        cleanupPending reports whether durable background cleanup remains. Deleted
+        IDs remain reserved permanently in their original scope. A request already
+        sent to Telegram can still finish; delivered messages are not recalled.
+      tags: [ Administration ]
+      security:
+        - adminSession: [ ]
+        - localAdminSession: [ ]
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          description: Tenant ID.
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9_-]{1,47}$'
+        - name: applicationId
+          in: path
+          required: true
+          description: Application ID within the selected tenant.
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$'
+        - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceDelete'
+      responses:
+        '200':
+          description: Resource removed from active use; remaining cleanup is retried durably.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceDeletionResult'
+        '400':
+          description: INVALID_DELETION for a missing or invalid expectedVersion or unsupported fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Tenant, bot, or application was not found in the requested scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
+    get:
+      operationId: getApplicationForTenant
+      summary: Read public application metadata and its current version
+      description: Returns only the application in the requested tenant and selected bot scope; never returns its API key.
+      tags: [ Administration ]
+      security:
+        - adminSession: [ ]
+        - localAdminSession: [ ]
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9_-]{1,47}$'
+        - name: applicationId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9-]{0,46}[a-z0-9]$'
+      responses:
+        '200':
+          description: Public application metadata including its version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  application:
+                    $ref: '#/components/schemas/Application'
+                required: [ application ]
+                additionalProperties: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Tenant, selected bot, or application was not found in the requested scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
   "/api/admin/tenants/{tenantId}/applications/{applicationId}/rotate-key":
     parameters:
       - $ref: '#/components/parameters/BotScope'
@@ -2936,7 +3159,7 @@ paths:
               schema:
                 "$ref": "#/components/schemas/Error"
         "409":
-          description: "BOT_DISABLED, immutable application bot association, idempotency, identity/ownership, or optimistic-version conflict."
+          description: "TENANT_EXISTS when the ID is already used, or RESOURCE_ID_RETIRED when that ID was deleted. Deleted tenant IDs cannot be reused."
           content:
             "application/json":
               schema:
@@ -3027,7 +3250,11 @@ paths:
           description: "Tenant ID. The default tenant is named default."
     patch:
       operationId: "updateTenant"
-      summary: "Update tenant name, enabled state, or quotas"
+      summary: "Update tenant name, enabled state, quotas, or inherited access restrictions"
+      description: >-
+        Clearing the access restrictions retained after default-bot deletion is
+        an explicit action: send clearInheritedAccess:true and the latest
+        expectedVersion. Remaining bots retain their own IP/country rules.
       tags:
         [ "Administration" ]
       security:
@@ -3097,6 +3324,70 @@ paths:
           "application/json":
             schema:
               "$ref": "#/components/schemas/TenantUpdate"
+    delete:
+      operationId: deleteTenant
+      summary: Delete a tenant and all of its bots and applications
+      description: >-
+        Requires the latest resource version. Deletion revokes access immediately;
+        cleanupPending reports whether durable background cleanup remains. Deleted
+        IDs remain reserved permanently in their original scope. A request already
+        sent to Telegram can still finish; delivered messages are not recalled.
+      tags: [ Administration ]
+      security:
+        - adminSession: [ ]
+        - localAdminSession: [ ]
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          description: Tenant ID. The system tenant default cannot be deleted.
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9_-]{1,47}$'
+        - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceDelete'
+      responses:
+        '200':
+          description: Resource removed from active use; remaining cleanup is retried durably.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceDeletionResult'
+        '400':
+          description: INVALID_DELETION for a missing or invalid expectedVersion or unsupported fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Tenant, bot, or application was not found in the requested scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
   "/api/admin/tenants/{tenantId}/bot":
     put:
       operationId: "configureTenantBot"
@@ -3255,16 +3546,16 @@ paths:
           description: "Tenant ID. The default tenant is named default."
   /api/admin/tenants/{tenantId}/automation:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationTenantId'
-    - $ref: '#/components/parameters/AutomationApplicationId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationTenantId'
+      - $ref: '#/components/parameters/AutomationApplicationId'
     get:
       operationId: getTenantAutomation
       summary: Read effective automation policy
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read effective automation policy
@@ -3286,11 +3577,11 @@ paths:
       operationId: updateTenantAutomation
       summary: Update tenant defaults or an application override
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -3324,28 +3615,28 @@ paths:
       operationId: resetTenantAutomation
       summary: Remove an application override and restore inheritance
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       description: Requires applicationId; tenant defaults cannot be deleted. Returned revision increases after reset.
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
-      - name: applicationId
-        in: query
-        required: true
-        schema:
-          type: string
-          minLength: 2
-          maxLength: 48
-        description: Omit for selected-bot policy; provide an application belonging to that bot for its effective policy/override.
-      - name: expectedVersion
-        in: query
-        required: true
-        schema:
-          type: integer
-          minimum: 0
-          maximum: 9007199254740990
-          description: Version from latest GET. Stale writes return HTTP 409.
+        - $ref: '#/components/parameters/AutomationOrigin'
+        - name: applicationId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 48
+          description: Omit for selected-bot policy; provide an application belonging to that bot for its effective policy/override.
+        - name: expectedVersion
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 9007199254740990
+            description: Version from latest GET. Stale writes return HTTP 409.
       responses:
         '200':
           description: Remove an application override and restore inheritance
@@ -3369,19 +3660,19 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/automation/preview:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationTenantId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationTenantId'
     post:
       operationId: previewTenantAutomation
       summary: Simulate delivery without sending
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       description: Uses persisted effective policy/preferences and checks bans, active subscriptions and application access
         when chatId is supplied.
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -3413,15 +3704,15 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/incidents:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationTenantId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationTenantId'
     get:
       operationId: listTenantIncidents
       summary: List retained tenant incidents
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: List retained tenant incidents
@@ -3440,36 +3731,36 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       parameters:
-      - name: page
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-          default: 1
-      - name: status
-        in: query
-        schema:
-          type: string
-          enum:
-          - open
-          - acknowledged
-          - snoozed
-          - resolved
-      - name: applicationId
-        in: query
-        schema:
-          type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - open
+              - acknowledged
+              - snoozed
+              - resolved
+        - name: applicationId
+          in: query
+          schema:
+            type: string
   /api/admin/tenants/{tenantId}/incidents/overview:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationTenantId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationTenantId'
     get:
       operationId: getTenantIncidentOverview
       summary: Read incident counts and response-time metrics
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read incident counts and response-time metrics
@@ -3489,16 +3780,16 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/incidents/{id}:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationTenantId'
-    - $ref: '#/components/parameters/AutomationIncidentId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationTenantId'
+      - $ref: '#/components/parameters/AutomationIncidentId'
     get:
       operationId: getTenantIncident
       summary: Read an incident and its timeline
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read an incident and its timeline
@@ -3518,20 +3809,20 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/incidents/{id}/actions:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationTenantId'
-    - $ref: '#/components/parameters/AutomationIncidentId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationTenantId'
+      - $ref: '#/components/parameters/AutomationIncidentId'
     post:
       operationId: actOnTenantIncident
       summary: Acknowledge, snooze, or resolve an incident
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       description: Records a dashboard action and schedules Telegram message updates. Actor identity cannot be forged in the
         admin input; Telegram callbacks independently enforce responder permissions.
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -3563,16 +3854,16 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/tenants/{tenantId}/subscribers/{chatId}/preferences:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationTenantId'
-    - $ref: '#/components/parameters/AutomationSubscriberId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationTenantId'
+      - $ref: '#/components/parameters/AutomationSubscriberId'
     get:
       operationId: getTenantSubscriberPreferences
       summary: Read subscriber delivery preferences
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read subscriber delivery preferences
@@ -3594,11 +3885,11 @@ paths:
       operationId: updateTenantSubscriberPreferences
       summary: Update filters, quiet hours, and digest preferences
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -3630,15 +3921,15 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/automation:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationApplicationId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationApplicationId'
     get:
       operationId: getDefaultAutomation
       summary: Read effective automation policy
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read effective automation policy
@@ -3661,11 +3952,11 @@ paths:
       operationId: updateDefaultAutomation
       summary: Update tenant defaults or an application override
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -3700,29 +3991,29 @@ paths:
       operationId: resetDefaultAutomation
       summary: Remove an application override and restore inheritance
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       description: Requires applicationId; tenant defaults cannot be deleted. Returned revision increases after reset. Default-tenant
         alias.
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
-      - name: applicationId
-        in: query
-        required: true
-        schema:
-          type: string
-          minLength: 2
-          maxLength: 48
-        description: Omit for selected-bot policy; provide an application belonging to that bot for its effective policy/override.
-      - name: expectedVersion
-        in: query
-        required: true
-        schema:
-          type: integer
-          minimum: 0
-          maximum: 9007199254740990
-          description: Version from latest GET. Stale writes return HTTP 409.
+        - $ref: '#/components/parameters/AutomationOrigin'
+        - name: applicationId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 48
+          description: Omit for selected-bot policy; provide an application belonging to that bot for its effective policy/override.
+        - name: expectedVersion
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 9007199254740990
+            description: Version from latest GET. Stale writes return HTTP 409.
       responses:
         '200':
           description: Remove an application override and restore inheritance
@@ -3751,13 +4042,13 @@ paths:
       operationId: previewDefaultAutomation
       summary: Simulate delivery without sending
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       description: Uses persisted effective policy/preferences and checks bans, active subscriptions and application access
         when chatId is supplied. Default-tenant alias.
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -3794,9 +4085,9 @@ paths:
       operationId: listDefaultIncidents
       summary: List retained tenant incidents
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: List retained tenant incidents
@@ -3815,25 +4106,25 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
       parameters:
-      - name: page
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-          default: 1
-      - name: status
-        in: query
-        schema:
-          type: string
-          enum:
-          - open
-          - acknowledged
-          - snoozed
-          - resolved
-      - name: applicationId
-        in: query
-        schema:
-          type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum:
+              - open
+              - acknowledged
+              - snoozed
+              - resolved
+        - name: applicationId
+          in: query
+          schema:
+            type: string
       description: Default-tenant alias.
   /api/admin/incidents/overview:
     parameters:
@@ -3842,9 +4133,9 @@ paths:
       operationId: getDefaultIncidentOverview
       summary: Read incident counts and response-time metrics
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read incident counts and response-time metrics
@@ -3865,15 +4156,15 @@ paths:
       description: Default-tenant alias.
   /api/admin/incidents/{id}:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationIncidentId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationIncidentId'
     get:
       operationId: getDefaultIncident
       summary: Read an incident and its timeline
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read an incident and its timeline
@@ -3894,19 +4185,19 @@ paths:
       description: Default-tenant alias.
   /api/admin/incidents/{id}/actions:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationIncidentId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationIncidentId'
     post:
       operationId: actOnDefaultIncident
       summary: Acknowledge, snooze, or resolve an incident
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       description: Records a dashboard action and schedules Telegram message updates. Actor identity cannot be forged in the
         admin input; Telegram callbacks independently enforce responder permissions. Default-tenant alias.
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -3938,15 +4229,15 @@ paths:
           $ref: '#/components/responses/InternalError'
   /api/admin/subscribers/{chatId}/preferences:
     parameters:
-    - $ref: '#/components/parameters/BotScope'
-    - $ref: '#/components/parameters/AutomationSubscriberId'
+      - $ref: '#/components/parameters/BotScope'
+      - $ref: '#/components/parameters/AutomationSubscriberId'
     get:
       operationId: getDefaultSubscriberPreferences
       summary: Read subscriber delivery preferences
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       responses:
         '200':
           description: Read subscriber delivery preferences
@@ -3969,11 +4260,11 @@ paths:
       operationId: updateDefaultSubscriberPreferences
       summary: Update filters, quiet hours, and digest preferences
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
+        - adminSession: [ ]
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -4006,16 +4297,16 @@ paths:
       description: Default-tenant alias.
   /api/admin/tenants/{tenantId}/bots:
     parameters:
-    - &id001
-      $ref: '#/components/parameters/AutomationTenantId'
+      - &id001
+        $ref: '#/components/parameters/AutomationTenantId'
     get:
       operationId: listBotsForTenant
       summary: List or search tenant bots
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4032,8 +4323,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4059,25 +4349,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - name: page
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-          default: 1
-      - name: search
-        in: query
-        schema:
-          type: string
-          maxLength: 80
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 80
     post:
       operationId: createBotForTenant
       summary: Connect another bot to the tenant
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '201':
           description: Success.
@@ -4094,8 +4384,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4121,7 +4410,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -4130,16 +4419,16 @@ paths:
               $ref: '#/components/schemas/TelegramBotCreate'
   /api/admin/tenants/{tenantId}/bots/{botId}:
     parameters:
-    - *id001
-    - $ref: '#/components/parameters/BotId'
+      - *id001
+      - $ref: '#/components/parameters/BotId'
     get:
       operationId: getBotForTenant
       summary: Read public bot metadata
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4156,8 +4445,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4186,10 +4474,10 @@ paths:
       operationId: updateBotForTenant
       summary: Edit, enable, disable, or rotate bot token
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4206,8 +4494,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4233,25 +4520,82 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/TelegramBotUpdate'
+    delete:
+      operationId: deleteBotForTenant
+      summary: Delete a bot and its applications, subscribers, queued work, and reports
+      description: >-
+        Requires the latest resource version. Deletion revokes access immediately;
+        cleanupPending reports whether durable background cleanup remains. Deleted
+        IDs remain reserved permanently in their original scope. A request already
+        sent to Telegram can still finish; delivered messages are not recalled.
+      tags: [ Administration ]
+      security:
+        - adminSession: [ ]
+        - localAdminSession: [ ]
+      parameters:
+        - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceDelete'
+      responses:
+        '200':
+          description: Resource removed from active use; remaining cleanup is retried durably.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceDeletionResult'
+        '400':
+          description: INVALID_DELETION for a missing or invalid expectedVersion or unsupported fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Tenant, bot, or application was not found in the requested scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
   /api/admin/tenants/{tenantId}/bots/{botId}/status:
     parameters:
-    - *id001
-    - $ref: '#/components/parameters/BotId'
+      - *id001
+      - $ref: '#/components/parameters/BotId'
     get:
       operationId: getBotStatusForTenant
       summary: Read cached Telegram connection status
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4268,8 +4612,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4296,8 +4639,8 @@ paths:
                 $ref: '#/components/schemas/Error'
   /api/admin/tenants/{tenantId}/bots/{botId}/commands:
     parameters:
-    - *id001
-    - $ref: '#/components/parameters/BotId'
+      - *id001
+      - $ref: '#/components/parameters/BotId'
     post:
       operationId: registerBotCommandsForTenant
       summary: Register all supported commands in this bot's Telegram menu
@@ -4309,12 +4652,12 @@ paths:
         May configure a disabled bot without enabling it or sending messages. Safe to repeat after a partial
         Telegram failure. Bot connection, token saves, and webhook registration also synchronize this menu.
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       responses:
         '200':
           description: Telegram accepted the supported command list and menu button.
@@ -4352,16 +4695,16 @@ paths:
           $ref: '#/components/responses/NotConfigured'
   /api/admin/tenants/{tenantId}/bots/{botId}/webhook:
     parameters:
-    - *id001
-    - $ref: '#/components/parameters/BotId'
+      - *id001
+      - $ref: '#/components/parameters/BotId'
     post:
       operationId: registerBotWebhookForTenant
       summary: Register this bot webhook on a public HTTPS origin
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4378,8 +4721,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4405,7 +4747,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -4419,18 +4761,18 @@ paths:
                   maxLength: 2048
                   description: HTTPS origin plus /telegram/{tenantId}/bots/{botId}/webhook. No credentials, query, or fragment.
               required:
-              - url
+                - url
               additionalProperties: false
   /api/admin/bots:
-    parameters: []
+    parameters: [ ]
     get:
       operationId: listBots
       summary: List or search tenant bots
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4447,8 +4789,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4474,25 +4815,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - name: page
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-          default: 1
-      - name: search
-        in: query
-        schema:
-          type: string
-          maxLength: 80
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 80
     post:
       operationId: createBot
       summary: Connect another bot to the tenant
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '201':
           description: Success.
@@ -4509,8 +4850,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4536,7 +4876,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -4545,15 +4885,15 @@ paths:
               $ref: '#/components/schemas/TelegramBotCreate'
   /api/admin/bots/{botId}:
     parameters:
-    - $ref: '#/components/parameters/BotId'
+      - $ref: '#/components/parameters/BotId'
     get:
       operationId: getBot
       summary: Read public bot metadata
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4570,8 +4910,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4600,10 +4939,10 @@ paths:
       operationId: updateBot
       summary: Edit, enable, disable, or rotate bot token
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4620,8 +4959,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4647,24 +4985,81 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/TelegramBotUpdate'
+    delete:
+      operationId: deleteBot
+      summary: Delete a bot in the default tenant
+      description: >-
+        Requires the latest resource version. Deletion revokes access immediately;
+        cleanupPending reports whether durable background cleanup remains. Deleted
+        IDs remain reserved permanently in their original scope. A request already
+        sent to Telegram can still finish; delivered messages are not recalled.
+      tags: [ Administration ]
+      security:
+        - adminSession: [ ]
+        - localAdminSession: [ ]
+      parameters:
+        - $ref: '#/components/parameters/AutomationOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceDelete'
+      responses:
+        '200':
+          description: Resource removed from active use; remaining cleanup is retried durably.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceDeletionResult'
+        '400':
+          description: INVALID_DELETION for a missing or invalid expectedVersion or unsupported fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Tenant, bot, or application was not found in the requested scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/BodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotConfigured'
   /api/admin/bots/{botId}/status:
     parameters:
-    - $ref: '#/components/parameters/BotId'
+      - $ref: '#/components/parameters/BotId'
     get:
       operationId: getBotStatus
       summary: Read cached Telegram connection status
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4681,8 +5076,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4709,7 +5103,7 @@ paths:
                 $ref: '#/components/schemas/Error'
   /api/admin/bots/{botId}/commands:
     parameters:
-    - $ref: '#/components/parameters/BotId'
+      - $ref: '#/components/parameters/BotId'
     post:
       operationId: registerBotCommands
       summary: Register all supported commands in this bot's Telegram menu
@@ -4721,12 +5115,12 @@ paths:
         May configure a disabled bot without enabling it or sending messages. Safe to repeat after a partial
         Telegram failure. Bot connection, token saves, and webhook registration also synchronize this menu.
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       responses:
         '200':
           description: Telegram accepted the supported command list and menu button.
@@ -4764,15 +5158,15 @@ paths:
           $ref: '#/components/responses/NotConfigured'
   /api/admin/bots/{botId}/webhook:
     parameters:
-    - $ref: '#/components/parameters/BotId'
+      - $ref: '#/components/parameters/BotId'
     post:
       operationId: registerBotWebhook
       summary: Register this bot webhook on a public HTTPS origin
       tags:
-      - Administration
+        - Administration
       security:
-      - adminSession: []
-      - localAdminSession: []
+        - adminSession: [ ]
+        - localAdminSession: [ ]
       responses:
         '200':
           description: Success.
@@ -4789,8 +5183,7 @@ paths:
         '404':
           $ref: '#/components/responses/AutomationNotFound'
         '409':
-          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. Reload
-            stale state or enable the bot before retrying.
+          description: BOT_EXISTS, STALE_BOT, BOT_ALREADY_ASSIGNED, RESOURCE_ID_RETIRED, BOT_CHANGE_REQUIRES_NEW_BOT, or BOT_DISABLED. BOT_ALREADY_ASSIGNED includes the existing owner name in the message and public error.owner metadata. Reload stale state or enable the bot before retrying.
           content:
             application/json:
               schema:
@@ -4816,7 +5209,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       parameters:
-      - $ref: '#/components/parameters/AutomationOrigin'
+        - $ref: '#/components/parameters/AutomationOrigin'
       requestBody:
         required: true
         content:
@@ -4830,16 +5223,16 @@ paths:
                   maxLength: 2048
                   description: HTTPS origin plus /telegram/{tenantId}/bots/{botId}/webhook. No credentials, query, or fragment.
               required:
-              - url
+                - url
               additionalProperties: false
   /telegram/{tenantId}/bots/{botId}/webhook:
     post:
       operationId: telegramWebhookForBot
       summary: Receive bot-scoped Telegram updates
       tags:
-      - Telegram
+        - Telegram
       security:
-      - telegramWebhookSecret: []
+        - telegramWebhookSecret: [ ]
       requestBody:
         required: true
         content:
@@ -4857,7 +5250,7 @@ paths:
                   ok:
                     const: true
                 required:
-                - ok
+                  - ok
                 additionalProperties: false
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -4876,14 +5269,14 @@ paths:
         '503':
           $ref: '#/components/responses/NotConfigured'
       parameters:
-      - name: tenantId
-        in: path
-        required: true
-        schema:
-          type: string
-          pattern: ^[a-z0-9][a-z0-9_-]{1,47}$
-        description: Tenant ID. The default tenant is named default.
-      - $ref: '#/components/parameters/BotId'
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: ^[a-z0-9][a-z0-9_-]{1,47}$
+          description: Tenant ID. The default tenant is named default.
+        - $ref: '#/components/parameters/BotId'
       description: Requires this bot's webhook secret. Authenticated updates for a disabled tenant/bot are acknowledged
         without enrollment or replies; /stop and blocked/left updates still preserve user opt-outs.
 components:
@@ -4978,13 +5371,13 @@ components:
       properties:
         command:
           type: string
-          enum: [start, apps, all, stop, preferences, timezone, quiet]
+          enum: [ start, apps, all, stop, preferences, timezone, quiet ]
           description: Bare command name without slash or arguments.
         description:
           type: string
           minLength: 1
           maxLength: 256
-      required: [command, description]
+      required: [ command, description ]
       additionalProperties: false
     BotCommandsResult:
       type: object
@@ -4997,7 +5390,7 @@ components:
           maxItems: 7
           items:
             $ref: '#/components/schemas/BotCommand'
-      required: [ok, commands]
+      required: [ ok, commands ]
       additionalProperties: false
     BotWebhookResult:
       type: object
@@ -5007,7 +5400,7 @@ components:
         url:
           type: string
           format: uri
-      required: [ok, url]
+      required: [ ok, url ]
       additionalProperties: false
     TelegramBot:
       type: object
@@ -5022,12 +5415,12 @@ components:
           type: boolean
         telegramId:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
         username:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
         createdAt:
           type: string
           format: date-time
@@ -5042,15 +5435,15 @@ components:
           minimum: 0
           description: Number of applications assigned to this bot.
       required:
-      - id
-      - name
-      - enabled
-      - configured
-      - telegramId
-      - username
-      - createdAt
-      - updatedAt
-      - version
+        - id
+        - name
+        - enabled
+        - configured
+        - telegramId
+        - username
+        - createdAt
+        - updatedAt
+        - version
       additionalProperties: false
       description: Public bot metadata. Never contains tokens or webhook secrets.
     TelegramBotCreate:
@@ -5074,9 +5467,9 @@ components:
           type: boolean
           default: true
       required:
-      - id
-      - name
-      - botToken
+        - id
+        - name
+        - botToken
       additionalProperties: false
     TelegramBotUpdate:
       type: object
@@ -5103,7 +5496,7 @@ components:
         bot:
           $ref: '#/components/schemas/TelegramBot'
       required:
-      - bot
+        - bot
       additionalProperties: false
     TelegramBotPage:
       type: object
@@ -5119,19 +5512,19 @@ components:
         pageSize:
           const: 20
       required:
-      - items
-      - total
-      - page
-      - pageSize
+        - items
+        - total
+        - page
+        - pageSize
       additionalProperties: false
     AutomationLevel:
       type: string
       enum:
-      - info
-      - success
-      - warning
-      - error
-      - critical
+        - info
+        - success
+        - warning
+        - error
+        - critical
     IncidentFingerprint:
       type: string
       minLength: 1
@@ -5142,8 +5535,8 @@ components:
     IncidentStatus:
       type: string
       enum:
-      - firing
-      - resolved
+        - firing
+        - resolved
       description: Explicit lifecycle; resolved plus the same fingerprint resolves a matching open incident. Success severity
         alone never implies resolution.
     GroupingPolicy:
@@ -5158,8 +5551,8 @@ components:
           maximum: 86400
           default: 300
       required:
-      - enabled
-      - windowSeconds
+        - enabled
+        - windowSeconds
       additionalProperties: false
     EscalationPolicy:
       type: object
@@ -5181,9 +5574,9 @@ components:
           maxItems: 100
           description: Existing subscribers in this tenant; usernames are rejected. IDs must be safe integers.
       required:
-      - enabled
-      - afterMinutes
-      - targetChatIds
+        - enabled
+        - afterMinutes
+        - targetChatIds
       additionalProperties: false
       description: Eligible targets receive unacknowledged Critical incidents in order. At least one target is required when enabled;
         normal access and subscriber filters remain enforced.
@@ -5226,23 +5619,23 @@ components:
         mode:
           type: string
           enum:
-          - immediate
-          - digest
-          - mute
+            - immediate
+            - digest
+            - mute
         digestMinutes:
           type: integer
           minimum: 5
           maximum: 1440
           description: Required for all rules; applied only in digest mode.
       required:
-      - id
-      - name
-      - enabled
-      - levels
-      - environments
-      - tags
-      - mode
-      - digestMinutes
+        - id
+        - name
+        - enabled
+        - levels
+        - environments
+        - tags
+        - mode
+        - digestMinutes
       additionalProperties: false
     AutomationPolicy:
       type: object
@@ -5270,11 +5663,11 @@ components:
           maxItems: 50
           description: First enabled matching rule wins; empty match arrays are wildcards.
       required:
-      - version
-      - grouping
-      - responders
-      - escalation
-      - rules
+        - version
+        - grouping
+        - responders
+        - escalation
+        - rules
       additionalProperties: false
       description: Tenant policy or complete application override. Initial version is 0; use the monotonic tenant revision returned
         by each GET.
@@ -5297,7 +5690,7 @@ components:
               minimum: 30
               maximum: 86400
               default: 300
-          required: []
+          required: [ ]
           additionalProperties: false
         responders:
           type: array
@@ -5327,7 +5720,7 @@ components:
                 maxLength: 17
               maxItems: 100
               description: Existing subscribers in this tenant; usernames are rejected. IDs must be safe integers.
-          required: []
+          required: [ ]
           additionalProperties: false
         rules:
           type: array
@@ -5336,7 +5729,7 @@ components:
           maxItems: 50
           description: First enabled matching rule wins; empty match arrays are wildcards.
       required:
-      - expectedVersion
+        - expectedVersion
       additionalProperties: false
       description: Partial update. Nested fields merge; rules replace the ordered list. Updating an inheriting application creates
         an override. Unknown fields rejected.
@@ -5349,8 +5742,8 @@ components:
           type: boolean
           description: True when application inherits tenant policy.
       required:
-      - policy
-      - inherited
+        - policy
+        - inherited
       additionalProperties: false
     QuietHours:
       type: object
@@ -5367,9 +5760,9 @@ components:
           pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
           default: 08:00
       required:
-      - enabled
-      - start
-      - end
+        - enabled
+        - start
+        - end
       additionalProperties: false
       description: Inclusive start/exclusive end in local time. Overnight intervals supported; equal start/end rejected when enabled.
         Repeated/skipped local times follow timezone changes.
@@ -5386,11 +5779,11 @@ components:
           maxItems: 5
           description: Accepted levels; an empty array mutes everything, including Critical.
           default:
-          - info
-          - success
-          - warning
-          - error
-          - critical
+            - info
+            - success
+            - warning
+            - error
+            - critical
         environments:
           type: array
           items:
@@ -5409,8 +5802,8 @@ components:
         delivery:
           type: string
           enum:
-          - immediate
-          - digest
+            - immediate
+            - digest
           default: immediate
         digestMinutes:
           type: integer
@@ -5423,14 +5816,14 @@ components:
           description: Bypasses delays only; explicit mute, level/environment filters, bans and application/subscription permissions
             remain enforced.
       required:
-      - version
-      - levels
-      - environments
-      - timezone
-      - quietHours
-      - delivery
-      - digestMinutes
-      - criticalBypass
+        - version
+        - levels
+        - environments
+        - timezone
+        - quietHours
+        - delivery
+        - digestMinutes
+        - criticalBypass
       additionalProperties: false
     SubscriberPreferencesUpdate:
       type: object
@@ -5447,11 +5840,11 @@ components:
           maxItems: 5
           description: Accepted levels; an empty array mutes everything, including Critical.
           default:
-          - info
-          - success
-          - warning
-          - error
-          - critical
+            - info
+            - success
+            - warning
+            - error
+            - critical
         environments:
           type: array
           items:
@@ -5479,13 +5872,13 @@ components:
               type: string
               pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
               default: 08:00
-          required: []
+          required: [ ]
           additionalProperties: false
         delivery:
           type: string
           enum:
-          - immediate
-          - digest
+            - immediate
+            - digest
           default: immediate
         digestMinutes:
           type: integer
@@ -5498,7 +5891,7 @@ components:
           description: Bypasses delays only; explicit mute, level/environment filters, bans and application/subscription permissions
             remain enforced.
       required:
-      - expectedVersion
+        - expectedVersion
       additionalProperties: false
       description: Partial update; quiet-hour fields merge. If a rule and the subscriber both request digest mode, the longer
         interval applies.
@@ -5508,7 +5901,7 @@ components:
         preferences:
           $ref: '#/components/schemas/SubscriberPreferences'
       required:
-      - preferences
+        - preferences
       additionalProperties: false
     DeliveryPreviewInput:
       type: object
@@ -5536,8 +5929,8 @@ components:
           format: date-time
           description: Simulation time, defaults to now; no notification is queued or sent.
       required:
-      - applicationId
-      - level
+        - applicationId
+        - level
       additionalProperties: false
     DeliveryDecision:
       type: object
@@ -5545,23 +5938,23 @@ components:
         mode:
           type: string
           enum:
-          - immediate
-          - digest
-          - mute
-          - defer
+            - immediate
+            - digest
+            - mute
+            - defer
         reason:
           type: string
           description: default, level_filter, environment_filter, critical_bypass, quiet_hours, subscriber_digest, rule:<id>,
             or a permission-failure explanation.
         nextAt:
           type:
-          - integer
-          - 'null'
+            - integer
+            - 'null'
           description: Unix epoch milliseconds for future digest/defer delivery; null for immediate/mute.
       required:
-      - mode
-      - reason
-      - nextAt
+        - mode
+        - reason
+        - nextAt
       additionalProperties: false
     Incident:
       type: object
@@ -5575,8 +5968,8 @@ components:
           description: Most recent notification in this incident.
         applicationId:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
         application:
           type: string
         title:
@@ -5587,17 +5980,17 @@ components:
           $ref: '#/components/schemas/AutomationLevel'
         environment:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
         fingerprint:
           type: string
         status:
           type: string
           enum:
-          - open
-          - acknowledged
-          - snoozed
-          - resolved
+            - open
+            - acknowledged
+            - snoozed
+            - resolved
         occurrences:
           type: integer
           minimum: 1
@@ -5609,28 +6002,28 @@ components:
           format: date-time
         acknowledgedAt:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
           format: date-time
         resolvedAt:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
           format: date-time
         snoozedUntil:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
           format: date-time
         nextEscalationAt:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
           format: date-time
         assigneeChatId:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
         escalationCount:
           type: integer
           minimum: 0
@@ -5638,26 +6031,26 @@ components:
           type: integer
           minimum: 1
       required:
-      - id
-      - notificationId
-      - applicationId
-      - application
-      - title
-      - event
-      - level
-      - environment
-      - fingerprint
-      - status
-      - occurrences
-      - firstSeenAt
-      - lastSeenAt
-      - acknowledgedAt
-      - resolvedAt
-      - snoozedUntil
-      - nextEscalationAt
-      - assigneeChatId
-      - escalationCount
-      - version
+        - id
+        - notificationId
+        - applicationId
+        - application
+        - title
+        - event
+        - level
+        - environment
+        - fingerprint
+        - status
+        - occurrences
+        - firstSeenAt
+        - lastSeenAt
+        - acknowledgedAt
+        - resolvedAt
+        - snoozedUntil
+        - nextEscalationAt
+        - assigneeChatId
+        - escalationCount
+        - version
       additionalProperties: false
     IncidentEvent:
       type: object
@@ -5669,24 +6062,24 @@ components:
           type: string
         actorChatId:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
         actorName:
           type:
-          - string
-          - 'null'
+            - string
+            - 'null'
         createdAt:
           type: string
           format: date-time
         detail:
           type: string
       required:
-      - id
-      - action
-      - actorChatId
-      - actorName
-      - createdAt
-      - detail
+        - id
+        - action
+        - actorChatId
+        - actorName
+        - createdAt
+        - detail
       additionalProperties: false
     IncidentDetail:
       type: object
@@ -5700,8 +6093,8 @@ components:
           maxItems: 100
           description: Latest retained events in chronological order.
       required:
-      - incident
-      - timeline
+        - incident
+        - timeline
       additionalProperties: false
     IncidentActionInput:
       type: object
@@ -5709,9 +6102,9 @@ components:
         action:
           type: string
           enum:
-          - acknowledge
-          - snooze
-          - resolve
+            - acknowledge
+            - snooze
+            - resolve
         expectedVersion:
           type: integer
           minimum: 1
@@ -5722,8 +6115,8 @@ components:
           default: 15
           description: Used only for snooze actions.
       required:
-      - action
-      - expectedVersion
+        - action
+        - expectedVersion
       additionalProperties: false
     IncidentActionResponse:
       type: object
@@ -5731,7 +6124,7 @@ components:
         incident:
           $ref: '#/components/schemas/Incident'
       required:
-      - incident
+        - incident
       additionalProperties: false
     IncidentPage:
       type: object
@@ -5750,10 +6143,10 @@ components:
         pageSize:
           const: 20
       required:
-      - items
-      - total
-      - page
-      - pageSize
+        - items
+        - total
+        - page
+        - pageSize
       additionalProperties: false
     IncidentOverview:
       type: object
@@ -5778,18 +6171,52 @@ components:
           minimum: 0
         averageAckSeconds:
           type:
-          - integer
-          - 'null'
+            - integer
+            - 'null'
           minimum: 0
           description: Mean seconds to first acknowledgment across retained acknowledged incidents; null when none exist.
       required:
-      - open
-      - acknowledged
-      - snoozed
-      - resolved
-      - totalOccurrences
-      - escalations
-      - averageAckSeconds
+        - open
+        - acknowledged
+        - snoozed
+        - resolved
+        - totalOccurrences
+        - escalations
+        - averageAckSeconds
+      additionalProperties: false
+    ResourceDelete:
+      type: object
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: Latest version read from the resource. Required even when retrying a deletion.
+      required: [ expectedVersion ]
+      additionalProperties: false
+    ResourceDeletionResult:
+      type: object
+      properties:
+        deleted:
+          const: true
+        cleanupPending:
+          type: boolean
+          description: Access is already revoked. True means persistent background cleanup still needs to finish; it is retried automatically after transient failures or restart.
+      required: [ deleted, cleanupPending ]
+      additionalProperties: false
+    BotAssignmentOwner:
+      type: object
+      description: Public owner metadata included only in authenticated admin BOT_ALREADY_ASSIGNED errors; never contains a token or webhook secret.
+      properties:
+        tenantId:
+          type: string
+        tenantName:
+          type: string
+        botId:
+          type: string
+        botName:
+          type: string
+      required: [ tenantId, tenantName, botId, botName ]
       additionalProperties: false
     Error:
       type: "object"
@@ -5802,6 +6229,8 @@ components:
             message:
               type: "string"
               description: "Human-readable message; usually Persian."
+            owner:
+              $ref: '#/components/schemas/BotAssignmentOwner'
           required:
             [ "code","message" ]
           additionalProperties: false
@@ -5828,7 +6257,7 @@ components:
           description: "Body source. With parseMode omitted, literal text with a 3,000-character limit. With parseMode HTML, at most 12,000 source characters and 3,000 characters after parsing. The complete formatted plain-text message remains limited to 4,000 characters. Markdown is not parsed."
         parseMode:
           type: "string"
-          enum: ["HTML"]
+          enum: [ "HTML" ]
           description: "Optional HTML formatting for text only, converted to Telegram Rich Message blocks. Omit for literal text. Titles, metadata, tags and other fields remain literal. Unsupported tags/attributes, unsafe links or malformed HTML fail with HTTP 400 INVALID_HTML before queuing. See https://core.telegram.org/bots/api#rich-html-style and README for the supported subset."
         level:
           type: "string"
@@ -5903,7 +6332,7 @@ components:
           text: "<p><b>Deployment completed</b></p><p>Version <code>2.4.1</code> is healthy.</p>"
       allOf:
         - if:
-            required: [parseMode]
+            required: [ parseMode ]
             properties:
               parseMode:
                 const: HTML
@@ -5950,7 +6379,7 @@ components:
           description: "Parsed visible body, included for HTML notifications. Suitable for plain-text previews; text retains the original HTML source."
         parseMode:
           type: "string"
-          enum: ["HTML"]
+          enum: [ "HTML" ]
           description: "Optional HTML formatting for text only, converted to Telegram Rich Message blocks. Omit for literal text. Titles, metadata, tags and other fields remain literal. Unsupported tags/attributes, unsafe links or malformed HTML fail with HTTP 400 INVALID_HTML before queuing. See https://core.telegram.org/bots/api#rich-html-style and README for the supported subset."
         level:
           type: "string"
@@ -6047,7 +6476,7 @@ components:
       additionalProperties: false
       allOf:
         - if:
-            required: [parseMode]
+            required: [ parseMode ]
             properties:
               parseMode:
                 const: HTML
@@ -6709,7 +7138,7 @@ components:
           description: "Body source. With parseMode omitted, literal text with a 3,000-character limit. With parseMode HTML, at most 12,000 source characters and 3,000 characters after parsing. The complete formatted plain-text message remains limited to 4,000 characters. Markdown is not parsed."
         parseMode:
           type: "string"
-          enum: ["HTML"]
+          enum: [ "HTML" ]
           description: "Optional HTML formatting for text only, converted to Telegram Rich Message blocks. Omit for literal text. Titles, metadata, tags and other fields remain literal. Unsupported tags/attributes, unsafe links or malformed HTML fail with HTTP 400 INVALID_HTML before queuing. See https://core.telegram.org/bots/api#rich-html-style and README for the supported subset."
         level:
           type: "string"
@@ -6790,7 +7219,7 @@ components:
           applicationId: "payments-api"
       allOf:
         - if:
-            required: [parseMode]
+            required: [ parseMode ]
             properties:
               parseMode:
                 const: HTML
@@ -6869,6 +7298,9 @@ components:
           type: "boolean"
         isDefault:
           type: "boolean"
+        hasInheritedAccess:
+          type: "boolean"
+          description: Whether IP/country restrictions retained after default-bot deletion still form the tenant baseline.
         createdAt:
           type: "string"
           format: "date-time"
@@ -6890,7 +7322,7 @@ components:
           type:
             [ "string","null" ]
       required:
-        [ "id","name","enabled","isDefault","createdAt","updatedAt","version","limits","botConfigured","botId","botUsername" ]
+        [ "id","name","enabled","isDefault","hasInheritedAccess","createdAt","updatedAt","version","limits","botConfigured","botId","botUsername" ]
       additionalProperties: false
     TenantCreate:
       type: "object"
@@ -6924,8 +7356,14 @@ components:
           type: "integer"
           minimum: 1
           description: "Version last observed by the client; stale writes return 409."
+        clearInheritedAccess:
+          type: boolean
+          const: true
+          description: Explicitly remove the retained tenant IP/country baseline. Requires expectedVersion; omitted preserves it. Other bots keep their own access rules.
       required:
         [ ]
+      dependentRequired:
+        clearInheritedAccess: [ expectedVersion ]
       additionalProperties: false
     Application:
       type: "object"

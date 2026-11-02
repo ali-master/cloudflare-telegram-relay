@@ -1,0 +1,290 @@
+.resource-delete-action {
+    color: var(--danger-fg);
+}
+
+.resource-delete-action:hover:not(:disabled) {
+    background: var(--danger-bg);
+}
+
+.resource-delete-action:disabled {
+    color: var(--muted);
+}
+
+.resource-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.resource-delete-modal {
+    width: min(590px, calc(100vw - 28px));
+    padding: 0;
+    overflow: auto;
+    border-color: var(--danger-border);
+    background: var(--surface);
+}
+
+.resource-delete-modal .modal-heading {
+    padding: 24px 26px 0;
+    margin-bottom: 19px;
+    align-items: flex-start;
+}
+
+.resource-delete-modal .eyebrow {
+    color: var(--danger-fg);
+}
+
+.resource-delete-modal .modal-heading h2 {
+    margin-top: 7px;
+}
+
+.resource-delete-hero {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin: 0 26px 20px;
+    padding: 17px;
+    border: 1px solid var(--danger-border);
+    border-radius: 14px;
+    background: var(--danger-bg);
+}
+
+.resource-delete-emblem {
+    width: 43px;
+    height: 43px;
+    display: grid;
+    place-items: center;
+    flex: none;
+    border: 1px solid var(--danger-border);
+    border-radius: 13px;
+    color: var(--danger-fg);
+    background: var(--surface);
+}
+
+.resource-delete-emblem .icon {
+    width: 22px;
+    height: 22px;
+}
+
+.resource-delete-title {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.resource-delete-title strong {
+    font-size: 15px;
+    overflow-wrap: anywhere;
+}
+
+.resource-delete-title code {
+    color: var(--danger-fg);
+    font: 11px ui-monospace, monospace;
+    text-align: start;
+    overflow-wrap: anywhere;
+}
+
+.resource-delete-title small {
+    font-size: 10px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.resource-delete-effects {
+    display: grid;
+    gap: 15px;
+    padding: 0 27px;
+    margin-bottom: 19px;
+}
+
+.resource-delete-effect {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.resource-delete-step {
+    display: grid;
+    place-items: center;
+    width: 23px;
+    height: 23px;
+    flex: none;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    font: 10px ui-monospace, monospace;
+    color: var(--muted);
+    margin-top: 2px;
+}
+
+.resource-delete-effect strong {
+    display: block;
+    font-size: 12px;
+}
+
+.resource-delete-effect p {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.9;
+}
+
+.resource-delete-note {
+    padding: 13px 16px;
+    margin: 0 26px 20px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    font-size: 10px;
+    line-height: 1.9;
+    color: var(--muted);
+    background: var(--surface-inset);
+}
+
+.resource-delete-form {
+    padding: 0 26px 24px;
+}
+
+.resource-delete-form .field {
+    margin-bottom: 12px;
+}
+
+.resource-delete-form label {
+    line-height: 2;
+    display: block;
+    margin-bottom: 7px;
+}
+
+.resource-delete-form label code {
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 2px 6px;
+    margin-inline: 3px;
+    user-select: all;
+}
+
+.resource-delete-form input {
+    width: 100%;
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+}
+
+.resource-delete-form input:focus {
+    border-color: var(--danger-fg);
+    outline-color: var(--danger-border);
+}
+
+.resource-delete-status {
+    min-height: 22px;
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.9;
+}
+
+.resource-delete-footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    border-top: 1px solid var(--line);
+    margin-top: 18px;
+    padding-top: 18px;
+}
+
+.resource-delete-footer .button {
+    min-height: 41px;
+}
+
+.resource-delete-footer .danger-button:not(:disabled):hover {
+    border-color: var(--danger-fg);
+}
+
+.resource-delete-form .form-error {
+    margin: 12px 0;
+}
+
+#resource-delete-reload {
+    margin-top: 8px;
+    font-size: 11px;
+}
+
+.bot-card-actions .resource-delete-action {
+    margin-inline-start: 0;
+}
+
+.bot-empty-hint {
+    margin-top: 14px;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+@media (max-width: 600px) {
+    .resource-delete-modal .modal-heading {
+        padding: 20px 18px 0;
+    }
+
+    .resource-delete-hero, .resource-delete-note {
+        margin-inline: 18px;
+    }
+
+    .resource-delete-effects {
+        padding-inline: 19px;
+    }
+
+    .resource-delete-form {
+        padding-inline: 18px;
+        padding-bottom: 18px;
+    }
+
+    .resource-delete-hero {
+        padding: 13px;
+        gap: 11px;
+    }
+
+    .resource-delete-title strong {
+        font-size: 13px;
+    }
+
+    .resource-delete-footer {
+        flex-wrap: wrap;
+    }
+
+    .resource-delete-footer .button {
+        flex: 1 1 125px;
+    }
+}
+
+.tenant-inherited-access {
+    padding: 16px;
+    margin-top: 19px;
+    border: 1px solid var(--warning-border);
+    border-radius: 12px;
+    background: var(--warning-bg);
+}
+
+.tenant-inherited-access h3 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--warning-fg);
+}
+
+.tenant-inherited-access p, .tenant-inherited-access small {
+    font-size: 11px;
+    line-height: 1.9;
+    color: var(--muted);
+}
+
+.tenant-inherited-access label {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-block: 13px 6px;
+    font-size: 12px;
+    line-height: 1.9;
+}
+
+.tenant-inherited-access input[type=checkbox] {
+    flex: none;
+    width: 17px;
+    height: 17px;
+    margin-top: 3px;
+}
