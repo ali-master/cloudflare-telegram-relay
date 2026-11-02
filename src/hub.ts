@@ -711,6 +711,13 @@ export class NotificationHub extends DurableObject<Env> {
     return this.getSettings();
   }
 
+  /** Clear authentication throttles after a completed project reset without changing the login secret. */
+  clearRateLimits(): void {
+    this.lifecycle.assertActive();
+    this.sql.exec('DELETE FROM rate_limits');
+    this.rateCounters.clear();
+  }
+
   rateLimit(key: string, limit: number, windowSeconds: number): boolean {
     this.lifecycle.assertActive();
     const now = Date.now();

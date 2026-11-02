@@ -172,6 +172,8 @@ app.use('/api/admin/*', async (c, next) => {
   if (!['GET', 'HEAD'].includes(c.req.method)) requireOrigin(c);
   await next();
 });
+app.get('/api/admin/reset', async c => c.json(await registry(c).getResetStatus()));
+app.post('/api/admin/reset', async c => c.json(await registry(c).resetProject(await jsonBody(c)), 202));
 app.get('/api/admin/login-audit', async c => c.json(await registry(c).listLoginAudit(loginAuditQuery(c.req.query()))));
 app.post('/api/admin/logout', c => {
   deleteCookie(c, cookieName(c), {
@@ -469,7 +471,8 @@ app.onError(async (error, c) => {
   }
   const rpcErrors: Record<string, [number, string]> = {
     INVALID_DELETION: [400, 'برای حذف، نسخهٔ فعلی منبع را با expectedVersion ارسال کنید.'],
-    DEFAULT_RESOURCE_PROTECTED: [409, 'فضای پیش‌فرض سیستم قابل حذف نیست؛ می‌توانید بات‌ها و اپلیکیشن‌های آن را حذف کنید.'],
+    INVALID_RESET: [400, 'عبارت تأیید ریست صحیح نیست.'],
+    PROJECT_RESETTING: [409, 'ریست پروژه در حال اجراست؛ تا پایان پاک‌سازی صبر کنید.'],
     RESOURCE_ID_RETIRED: [409, 'این شناسه قبلاً حذف شده است؛ برای جلوگیری از بازیابی داده‌های قدیمی، شناسهٔ تازه‌ای انتخاب کنید.'],
     RESOURCE_DELETED: [404, 'این منبع حذف شده است و دیگر قابل استفاده نیست.'],
     IDEMPOTENCY_CONFLICT: [409, 'این کلید قبلاً برای اعلان متفاوت استفاده شده است.'],

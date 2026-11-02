@@ -17,6 +17,60 @@ tags:
   - name: "Health"
     description: "Basic runtime routing health."
 paths:
+  /api/admin/reset:
+    get:
+      operationId: getProjectResetStatus
+      tags: [Administration]
+      summary: Observe durable project reset progress
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: Current progress; API_KEY is never included.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResetStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      operationId: resetProjectData
+      tags: [Administration]
+      summary: Erase all tenant business data while preserving the environment login key
+      description: Stops new tenant work immediately. Cleanup retries durably; retired identity fences remain and IDs cannot be reused. No default resources are recreated. Existing Telegram messages and external backups remain.
+      security:
+        - adminSession: []
+      parameters:
+        - in: header
+          name: Origin
+          required: true
+          schema:
+            type: string
+          description: Must exactly match the request origin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirmation]
+              properties:
+                confirmation:
+                  const: RESET ALL DATA
+      responses:
+        '202':
+          description: Durable reset accepted, or already running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResetStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   "/health":
     get:
       operationId: "health"
@@ -1344,7 +1398,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION. Reload a stale resource before confirming again; the default tenant can also be deleted.
           content:
             application/json:
               schema:
@@ -1871,7 +1925,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION. Reload a stale resource before confirming again; the default tenant can also be deleted.
           content:
             application/json:
               schema:
@@ -3340,7 +3394,7 @@ paths:
         - name: tenantId
           in: path
           required: true
-          description: Tenant ID. The system tenant default cannot be deleted.
+          description: Tenant ID, including default.
           schema:
             type: string
             pattern: '^[a-z0-9][a-z0-9_-]{1,47}$'
@@ -3375,7 +3429,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION. Reload a stale resource before confirming again; the default tenant can also be deleted.
           content:
             application/json:
               schema:
@@ -4571,7 +4625,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION. Reload a stale resource before confirming again; the default tenant can also be deleted.
           content:
             application/json:
               schema:
@@ -5036,7 +5090,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '409':
-          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION, or DEFAULT_RESOURCE_PROTECTED. Reload a stale resource before confirming again; the system tenant default cannot be deleted.
+          description: STALE_TENANT, STALE_BOT, STALE_APPLICATION. Reload a stale resource before confirming again; the default tenant can also be deleted.
           content:
             application/json:
               schema:
@@ -5366,6 +5420,22 @@ components:
       name: "X-Telegram-Bot-Api-Secret-Token"
       description: "Selected bot's private webhook secret. The default tenant may use TELEGRAM_WEBHOOK_SECRET until overridden."
   schemas:
+    ProjectResetStatus:
+      type: object
+      required: [running, startedAt, completedAt, pending]
+      properties:
+        running:
+          type: boolean
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        completedAt:
+          type: [string, 'null']
+          format: date-time
+        pending:
+          type: integer
+          minimum: 0
+          description: Remaining durable cleanup jobs, not individual database rows.
     BotCommand:
       type: object
       properties:

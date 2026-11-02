@@ -492,8 +492,8 @@ function renderTenants() {
     const remove = node('button', 'icon-button resource-delete-action');
     remove.type = 'button';
     remove.setAttribute('aria-label', `حذف فضای ${tenant.name}`);
-    remove.title = tenant.isDefault ? 'فضای پیش‌فرض سامانه قابل حذف نیست.' : 'حذف فضا و داده‌های وابسته';
-    remove.disabled = tenant.isDefault || state.activeWrites > 0;
+    remove.title = 'حذف فضا و داده‌های وابسته';
+    remove.disabled = state.activeWrites > 0;
     remove.append(icon('trash'));
     remove.addEventListener('click', () => window.RelayDeletion.open('tenant', tenant));
     buttons.append(select, guide, edit, remove);
@@ -1814,9 +1814,15 @@ async function loadLoginAudit(reset = false) {
 
 function changeTab(tab, focus = false) {
   if (!Object.hasOwn(titles, tab)) tab = 'overview';
-  if (state.authenticated && state.tenantId && !state.bot && !['bots', 'tenants', 'login-audit'].includes(tab)) tab = 'bots';
+  if (state.authenticated && state.tenantId && !state.bot && !['bots', 'tenants', 'login-audit', 'settings'].includes(tab)) tab = 'bots';
   if (tab !== state.tab && (!window.RelayBots.canLeave(() => changeTab(tab, focus)) || !window.RelayAutomation.canLeave(() => changeTab(tab, focus)))) return;
   state.tab = tab;
+  if (tab === 'settings') {
+    $('#settings-form').hidden = !state.bot;
+    $('#save-settings').hidden = !state.bot;
+    $('#panel-settings .connection-settings').hidden = !state.bot;
+    if (state.authenticated) void window.RelayReset.refresh();
+  }
   $$('.nav-item[role=tab]').forEach(button => {
     const active = button.dataset.tab === tab;
     button.classList.toggle('active', active);
@@ -1845,7 +1851,7 @@ function changeTab(tab, focus = false) {
   if (tab === 'notifications') handleLoad(() => loadNotifications());
   if (tab === 'subscribers') handleLoad(() => loadSubscribers());
   if (['incidents', 'automation'].includes(tab)) handleLoad(() => window.RelayAutomation.activate(tab));
-  if (tab === 'settings' && !state.settings) handleLoad(async () => renderSettings(await api('/api/admin/settings')));
+  if (tab === 'settings' && state.bot && !state.settings) handleLoad(async () => renderSettings(await api('/api/admin/settings')));
 }
 
 function showAuth() {
@@ -2525,6 +2531,7 @@ function updateApiExample() {
   text('#api-status-example', statusExample);
 }
 
+window.RelayReset.init({$, state, api, showError, toast, reload: async () => { await loadTenants(); changeTab('settings'); }});
 window.RelayDeletion.init({
   $,
   state,

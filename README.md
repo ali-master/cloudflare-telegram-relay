@@ -87,11 +87,12 @@ Repeat for as many bots as you need; the relay imposes no bot-count cap. A Teleg
 If a token is already connected, the dashboard names the tenant and bot that own
 it. Tenant, bot and application entries also have **Delete** actions with an
 exact-ID confirmation. Deletion revokes access and removes dependent data and
-queued work; disabling remains available for a reversible pause. The system
-tenant `default` is protected, but its bots can be deleted. Deleted record IDs
+queued work; disabling remains available for a reversible pause. The default
+tenant and all bots can also be deleted. Deleted record IDs
 cannot be reused. Cleanup retries durably, and deleting a relay connection does
 not delete the Telegram bot account. See [deletion and ownership conflicts](docs/multi-bot.md#delete-a-tenant-bot-or-application)
-for the API, cleanup status and in-flight delivery limits.
+for the API, cleanup status and in-flight delivery limits. Settings also provides
+a project-wide reset with typed confirmation; it preserves the admin login key.
 
 Disabling a bot rejects new notifications for **all its applications** with HTTP **409 `BOT_DISABLED`**, including Grafana, Alertmanager, and dashboard sends. Its queued messages stay paused and resume after re-enabling, subject to current permissions and retention. Requests already in flight to Telegram may finish. Other bots keep working.
 

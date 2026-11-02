@@ -104,10 +104,6 @@ window.RelayDeletion = (() => {
   /** Open one destructive confirmation, preserving unsaved work in other dashboard panels. */
   function open(kind, entity) {
     if (ui.state.activeWrites || model.saving) return;
-    if (kind === 'tenant' && entity.id === 'default') {
-      ui.toast('فضای پیش‌فرض برای مدیریت سامانه نگه داشته می‌شود و قابل حذف نیست.', true);
-      return;
-    }
     if (!ui.canLeave(() => open(kind, entity))) return;
     model.target = {
       kind, entity: {...entity}, tenantId: kind === 'tenant' ? entity.id : ui.state.tenantId,

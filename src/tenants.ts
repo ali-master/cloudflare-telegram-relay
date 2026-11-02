@@ -111,6 +111,7 @@ function tokenIdentity(token: string): string | null {
 
 /** The registry loads its bounded table once; tenant/runtime reads never query SQLite. */
 export class TenantRegistry extends DurableObject<Env> {
+  private resetState: {running:boolean; startedAt:string|null; completedAt:string|null} = {running:false, startedAt:null, completedAt:null};
   private cleanupRunning: Promise<void> | null = null;
   private readonly pendingApplicationCleanup = new Map<string, Set<string>>();
   private readonly applications: ApplicationStore;
@@ -126,6 +127,9 @@ export class TenantRegistry extends DurableObject<Env> {
     this.bots = new BotStore(ctx.storage.sql);
     this.loginAudit = new LoginAuditStore(ctx.storage.sql);
     ctx.blockConcurrencyWhile(async () => {
+      ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS project_state (id INTEGER PRIMARY KEY, body TEXT NOT NULL)');
+      const savedReset = ctx.storage.sql.exec<{body:string}>('SELECT body FROM project_state WHERE id=1').toArray()[0];
+      if (savedReset) this.resetState = JSON.parse(savedReset.body);
       ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS resource_cleanup_jobs
       (
           kind
@@ -167,7 +171,7 @@ export class TenantRegistry extends DurableObject<Env> {
         version: 1, limits: {...DEFAULT_TENANT_LIMITS},
         botToken: null, webhookSecret: null, botId: null, botUsername: null,
       };
-      ctx.storage.sql.exec('INSERT OR IGNORE INTO tenants (id, body) VALUES (?, ?)', initial.id, JSON.stringify(initial));
+      if (!this.retired('tenant', 'default', 'default')) ctx.storage.sql.exec('INSERT OR IGNORE INTO tenants (id, body) VALUES (?, ?)', initial.id, JSON.stringify(initial));
       const rows = ctx.storage.sql.exec<TenantRow>(`SELECT id, body
                                                     FROM tenants
                                                     WHERE NOT EXISTS (SELECT 1
@@ -184,7 +188,7 @@ export class TenantRegistry extends DurableObject<Env> {
       for (const job of ctx.storage.sql.exec<CleanupJob>("SELECT kind,tenant_id,resource_id,bot_id,not_before FROM resource_cleanup_jobs WHERE kind='application'")) {
         this.cacheApplicationCleanup(job.tenant_id, job.bot_id, job.resource_id);
       }
-      if (ctx.storage.sql.exec('SELECT 1 FROM tenant_wake_jobs UNION ALL SELECT 1 FROM resource_cleanup_jobs LIMIT 1').toArray().length) await this.scheduleRegistryAlarm(Date.now() + 100);
+      if (this.resetState.running || ctx.storage.sql.exec('SELECT 1 FROM tenant_wake_jobs UNION ALL SELECT 1 FROM resource_cleanup_jobs LIMIT 1').toArray().length) await this.scheduleRegistryAlarm(Date.now() + 100);
     });
   }
 
@@ -249,11 +253,10 @@ export class TenantRegistry extends DurableObject<Env> {
     return {deleted: true, cleanupPending: this.deletionPending(kind, tenantId, id)};
   }
 
-  /** Purge a tenant's fleet data while preserving the system tenant used for administration. */
+  /** Purge a tenant's fleet data, including the default tenant, independently of admin authentication. */
   async deleteTenant(id: string, input: ResourceDeletion): Promise<ResourceDeletionResult> {
     const version = this.deletionVersion(input);
     tenantId(id);
-    if (id === 'default') fail('DEFAULT_RESOURCE_PROTECTED', 'The system tenant cannot be deleted.');
     const retired = this.retired('tenant', id, id);
     if (retired) {
       if (retired.version !== version) fail('STALE_TENANT', 'The deleted tenant version does not match.');
@@ -261,6 +264,13 @@ export class TenantRegistry extends DurableObject<Env> {
     }
     const tenant = this.stored(id);
     this.checkVersion(tenant, version);
+    this.retireTenant(tenant);
+    return this.finishDeletion('tenant', id, id);
+  }
+
+  /** Fence every tenant synchronously before asynchronous database cleanup starts. */
+  private retireTenant(tenant: StoredTenant): void {
+    const id = tenant.id, version = tenant.version;
     this.ctx.storage.transactionSync(() => {
       this.tombstone('tenant', id, id, '', version);
       this.retireApplications(id);
@@ -278,7 +288,41 @@ export class TenantRegistry extends DurableObject<Env> {
     this.tenants.delete(id);
     for (const key of this.pendingApplicationCleanup.keys()) if (key.startsWith(`${id}:`)) this.pendingApplicationCleanup.delete(key);
     this.clearStatus(id);
-    return this.finishDeletion('tenant', id, id);
+  }
+
+  /** Return reset progress without exposing credentials or provider failures. */
+  getResetStatus() {
+    return {...this.resetState, pending: Number(this.ctx.storage.sql.exec<{count:number}>('SELECT COUNT(*) AS count FROM resource_cleanup_jobs').one().count)};
+  }
+
+  /** Reset all business data while preserving the environment-owned login key and stale-request fences. */
+  async resetProject(input: unknown) {
+    const data = record(input, 'INVALID_RESET');
+    onlyKeys(data, ['confirmation'], 'INVALID_RESET');
+    if (data.confirmation !== 'RESET ALL DATA') fail('INVALID_RESET', 'Explicit reset confirmation is required.');
+    if (!this.resetState.running) {
+      this.ctx.storage.transactionSync(() => {
+        for (const tenant of [...this.tenants.values()]) this.retireTenant(tenant);
+        this.resetState = {running:true, startedAt:new Date().toISOString(), completedAt:null};
+        this.ctx.storage.sql.exec('INSERT OR REPLACE INTO project_state(id,body) VALUES(1,?)', JSON.stringify(this.resetState));
+        this.ctx.storage.sql.exec('DELETE FROM login_audit');
+      });
+      this.statuses.clear();
+      this.statusRequests.clear();
+    }
+    await this.scheduleRegistryAlarm(Date.now()+100);
+    return this.getResetStatus();
+  }
+
+  /** Finalize only after every durable purge and remote webhook cleanup has completed. */
+  private async finishReset(): Promise<void> {
+    if (!this.resetState.running || this.ctx.storage.sql.exec('SELECT 1 FROM resource_cleanup_jobs LIMIT 1').toArray().length) return;
+    await this.env.HUB.getByName('admin-auth').clearRateLimits();
+    this.ctx.storage.transactionSync(() => {
+      for (const table of ['login_audit', 'tenant_bot_usage', 'tenant_wake_jobs']) this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
+      this.resetState = {...this.resetState, running:false, completedAt:new Date().toISOString()};
+      this.ctx.storage.sql.exec('UPDATE project_state SET body=? WHERE id=1', JSON.stringify(this.resetState));
+    });
   }
 
   /** Delete a bot and all its application credentials before purging its isolated Hub. */
@@ -421,6 +465,7 @@ export class TenantRegistry extends DurableObject<Env> {
   }
 
   async recordLoginAttempt(input: LoginAuditInput): Promise<void> {
+    if (this.resetState.running) return;
     const next = this.ctx.storage.transactionSync(() => this.loginAudit.append(input));
     const current = await this.ctx.storage.getAlarm();
     if (next !== null && (current === null || current > next)) await this.ctx.storage.setAlarm(next);
@@ -436,6 +481,7 @@ export class TenantRegistry extends DurableObject<Env> {
     let wakeFailed = false;
     try { await this.processWakeJobs(); } catch { wakeFailed = true; }
     await this.drainCleanup();
+    await this.finishReset();
     this.loginAudit.cleanup();
     const auditNext = this.loginAudit.nextCleanupAt();
     const cleanupNext = this.ctx.storage.sql.exec<{
@@ -469,6 +515,7 @@ export class TenantRegistry extends DurableObject<Env> {
   }
 
   private stored(id: string): StoredTenant {
+    if (this.resetState.running) fail('PROJECT_RESETTING', 'Project reset is in progress.');
     const tenant = this.tenants.get(tenantId(id));
     if (!tenant) fail('TENANT_NOT_FOUND', 'Tenant was not found.');
     return tenant;
@@ -589,6 +636,7 @@ export class TenantRegistry extends DurableObject<Env> {
   }
 
   async createTenant(input: TenantCreate): Promise<{ tenant: Tenant }> {
+    if (this.resetState.running) fail('PROJECT_RESETTING', 'Project reset is in progress.');
     const data = record(input);
     onlyKeys(data, ['id', 'name', 'limits']);
     const id = tenantId(data.id);

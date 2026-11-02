@@ -61,13 +61,23 @@ async function cleanup(): Promise<void> {
 }
 
 describe('resource deletion registry', () => {
-  it('requires the reviewed version and protects the system tenant', async () => {
+  it('deletes the default tenant permanently while preserving dashboard login', async () => {
+    const stub = registry();
+    const tenant = (await stub.getTenant('default'))!;
+    expect(await stub.deleteTenant('default', {expectedVersion: tenant.version})).toMatchObject({deleted:true});
+    await cleanup();
+    await evictDurableObject(stub);
+    expect(await stub.getTenant('default')).toBeNull();
+    expect(await stub.listTenants()).toEqual([]);
+    expect(await login()).toBeTruthy();
+    expect(await stub.createTenant({id:'fresh-space',name:'Fresh space'})).toMatchObject({tenant:{id:'fresh-space'}});
+  });
+
+  it('requires the reviewed version before deletion', async () => {
     const stub = registry();
     const {application} = await stub.createApplication('default', {id: 'guarded-app', name: 'Guarded'});
     await expect(rejected(() => stub.deleteApplication('default', application.id, {} as never))).rejects.toThrow('INVALID_DELETION:');
     await expect(rejected(() => stub.deleteApplication('default', application.id, {expectedVersion: application.version + 1}))).rejects.toThrow('STALE_APPLICATION:');
-    const tenant = (await stub.getTenant('default'))!;
-    await expect(rejected(() => stub.deleteTenant('default', {expectedVersion: tenant.version}))).rejects.toThrow('DEFAULT_RESOURCE_PROTECTED:');
     expect(await stub.getApplication('default', application.id)).not.toBeNull();
   });
   
@@ -93,8 +103,6 @@ describe('resource deletion registry', () => {
       id: application.id,
       name: 'Reused ID'
     }))).rejects.toThrow('RESOURCE_ID_RETIRED:');
-    const tenant = (await stub.getTenant('default'))!;
-    await expect(rejected(() => stub.deleteTenant('default', {expectedVersion: tenant.version}))).rejects.toThrow('DEFAULT_RESOURCE_PROTECTED:');
   });
   
   it('caches pending application fences across eviction and clears them after cleanup', async () => {
@@ -344,5 +352,53 @@ describe('resource deletion administration API', () => {
       name: 'Duplicate',
       botToken: '730007:private-owner-token'
     })).status).toBe(401);
+  });
+});
+
+
+describe('project reset', () => {
+  it('requires authentication, same origin and an exact explicit acknowledgement', async () => {
+    const cookie = await login();
+    expect((await request('/api/admin/reset', 'POST', {confirmation:'RESET ALL DATA'})).status).toBe(401);
+    expect((await request('/api/admin/reset', 'POST', {confirmation:'RESET ALL DATA'}, cookie, 'https://wrong.test')).status).toBe(403);
+    expect((await request('/api/admin/reset', 'POST', {confirmation:'reset'}, cookie)).status).toBe(400);
+    expect(await registry().getTenant('default')).not.toBeNull();
+  });
+
+  it('fences every tenant, survives restart and erases business data while preserving login', async () => {
+    const stub = registry(), cookie = await login();
+    await stub.createTenant({id:'reset-space',name:'Reset fixture'});
+    await stub.configureBot('reset-space','730021:reset-fixture');
+    const app = await stub.createApplication('reset-space',{id:'reset-app',name:'Reset app'});
+    await stub.recordLoginAttempt({ip:'203.0.113.10',country:'DE',outcome:'invalid_key',userAgent:'fixture',requestId:null});
+    const result = await request('/api/admin/reset','POST',{confirmation:'RESET ALL DATA'},cookie);
+    expect(result.status).toBe(202);
+    expect(await result.json()).toMatchObject({running:true});
+    expect(await stub.listTenants()).toEqual([]);
+    expect(await stub.verifyApplicationKey('reset-space',app.apiKey)).toBeNull();
+    await evictDurableObject(stub);
+    expect(await stub.getResetStatus()).toMatchObject({running:true});
+    await expect(rejected(() => stub.createTenant({id:'too-early',name:'Blocked'}))).rejects.toThrow('PROJECT_RESETTING:');
+    await cleanup();
+    expect(await stub.getResetStatus()).toMatchObject({running:false,pending:0});
+    expect(await stub.listLoginAudit()).toMatchObject({total:0});
+    expect(await login()).toBeTruthy();
+    expect((await request('/api/admin/session','GET',undefined,cookie)).status).toBe(200);
+    expect(await stub.createTenant({id:'after-reset',name:'Fresh'})).toMatchObject({tenant:{id:'after-reset'}});
+    expect(vi.mocked(globalThis.fetch).mock.calls.some(([input]) => String(input).endsWith('/deleteWebhook'))).toBe(true);
+  });
+
+  it('keeps reset pending through provider failures and resumes safely', async () => {
+    const stub = registry();
+    await stub.configureBot('default','730022:reset-retry-fixture');
+    vi.mocked(globalThis.fetch).mockImplementation(async input => String(input).endsWith('/deleteWebhook') ? new Response(JSON.stringify({ok:false}),{status:503}) : telegram(input));
+    await stub.resetProject({confirmation:'RESET ALL DATA'});
+    await runDurableObjectAlarm(stub);
+    expect(await stub.getResetStatus()).toMatchObject({running:true});
+    await evictDurableObject(stub);
+    vi.mocked(globalThis.fetch).mockImplementation(async input => telegram(input));
+    await cleanup();
+    expect(await stub.getResetStatus()).toMatchObject({running:false,pending:0});
+    expect(await stub.listTenants()).toEqual([]);
   });
 });

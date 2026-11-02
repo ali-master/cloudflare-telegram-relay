@@ -76,7 +76,7 @@ pause delivery and keep the configuration and reports.
 | Bot | Its connection, application keys, subscribers, settings, queued work, automation and delivery history | Other bots in the same tenant; a deleted default bot's IP/country restrictions are retained as the tenant baseline |
 | Application | Its key, notification/queue history and application-specific automation; its ID is removed from subscription selections | The bot, subscribers and other applications |
 
-The system tenant **`default` cannot be deleted**. Every bot, including a bot
+The default tenant **can be deleted**, including its bots and applications. Every bot, including a bot
 whose ID is `default`, can be deleted. A tenant may have no bots; create a new
 bot from its Bots page to use it again. Deleting the default bot retains a
 snapshot of its IP/country restrictions as the tenant baseline, so the deletion
@@ -132,8 +132,7 @@ The successful response is `{ "deleted": true, "cleanupPending": false }` or
 the same object with `cleanupPending: true`. A missing/invalid version or extra
 body fields return `400 INVALID_DELETION`. A stale version returns
 `409 STALE_TENANT`, `STALE_BOT`, or `STALE_APPLICATION`; reload the resource and
-confirm the newly displayed state before retrying. Attempting to delete the
-system tenant returns `409 DEFAULT_RESOURCE_PROTECTED`.
+confirm the newly displayed state before retrying.
 Repeating a deletion with the same version can return its remaining cleanup
 state while the parent resource still exists. Background cleanup also proceeds
 without polling or another delete request.
@@ -207,3 +206,25 @@ The existing bot becomes `default`, preserving its token, webhook secret, subscr
 After upgrading, use **Settings → Register commands** for each existing bot to publish the full command menu. Registering its webhook also synchronizes the menu.
 
 See [OpenAPI](openapi.yaml) for schemas and [delivery automation](automation.md) for policies and incident endpoints.
+
+
+## Reset project data
+
+Open **Settings → Reset project data**, then type `RESET ALL DATA` and confirm.
+This removes all tenants (including `default`), bots, application keys, subscribers,
+notifications, queue payloads, settings, automation and login audit entries.
+The `API_KEY` environment secret and dashboard login remain valid. No default
+resources are recreated automatically; create a new tenant after completion.
+
+`POST /api/admin/reset` accepts only `{"confirmation":"RESET ALL DATA"}` and requires
+an admin session, JSON content type and exact browser Origin. It returns HTTP 202
+with `{running, startedAt, completedAt, pending}`. `GET /api/admin/reset` returns
+that same progress shape. Writes to new or existing tenant resources are rejected
+with `409 PROJECT_RESETTING` until cleanup finishes. Provider failures are retried
+from durable storage, including after restart.
+
+Minimal deletion fences (retired IDs) and reset progress are retained to prevent
+stale requests from restoring removed data. Retired IDs cannot be reused. Existing
+Telegram messages remain and an already-started send can finish. The Telegram bot
+accounts themselves are not deleted. External backups and deployment secrets are
+outside this operation.

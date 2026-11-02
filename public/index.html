@@ -24,6 +24,7 @@
     <script src="/automation.js" defer></script>
     <script src="/bots.js" defer></script>
     <script src="/resource-deletion.js" defer></script>
+    <script src="/project-reset.js" defer></script>
     <script src="/bot-commands.js" defer></script>
     <script src="/notification-content.js" defer></script>
     <script src="/app.js" defer></script>
@@ -553,6 +554,24 @@
                 </article>
             </section>
             <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" class="panel" hidden>
+                <article class="card" id="project-reset-card">
+                    <div class="card-header"><div><h2>ریست کامل پروژه</h2><p>همهٔ فضاها، بات‌ها، کلیدهای اپلیکیشن، مشترکان، صف‌ها، گزارش‌ها و تنظیمات پاک می‌شوند. کلید ورود حفظ می‌شود.</p></div>
+                    <button type="button" id="open-project-reset" class="button secondary resource-delete-action">ریست داده‌های پروژه</button></div>
+                    <div class="settings-card-body"><p id="project-reset-status" role="status" aria-live="polite">عملیات سراسری و غیرقابل بازگشت است.</p></div>
+                </article>
+                <dialog id="project-reset-dialog" class="resource-delete-dialog">
+                    <form id="project-reset-form" class="resource-delete-content">
+                        <h2>تمام داده‌های پروژه پاک شوند؟</h2>
+                        <p>این عملیات همهٔ Tenantها را در بر می‌گیرد و دسترسی و ارسال جدید را فوراً متوقف می‌کند. پاک‌سازی تا پایان ادامه دارد؛ کلید ورود تغییر نمی‌کند.</p>
+                        <p>پیام‌های قبلی تلگرام پاک نمی‌شوند؛ ارسال در حال انجام ممکن است کامل شود. شناسه‌های حذف‌شده برای جلوگیری از بازگشت کارهای قدیمی رزرو می‌مانند.</p>
+                        <label for="project-reset-confirmation">برای تأیید، عبارت <bdi>RESET ALL DATA</bdi> را دقیق وارد کنید.</label>
+                        <input id="project-reset-confirmation" autocomplete="off" spellcheck="false" dir="ltr">
+                        <p id="project-reset-error" role="alert" hidden></p>
+                        <div class="resource-delete-footer"><button type="button" id="cancel-project-reset" class="button secondary">انصراف</button>
+                        <button type="submit" id="submit-project-reset" class="button secondary resource-delete-action" disabled>حذف همهٔ داده‌ها</button></div>
+                    </form>
+                </dialog>
+
                 <div class="page-heading">
                     <div><span class="eyebrow muted">PREFERENCES & SECURITY</span>
                         <h1>به سبک سرویس‌های شما<span class="accent">.</span></h1>

@@ -288,3 +288,13 @@
     height: 17px;
     margin-top: 3px;
 }
+
+/* Global reset stays usable even after the last tenant or bot is removed. */
+#project-reset-card { margin-bottom: 24px; border-color: var(--danger-border); }
+#project-reset-card .card-header { flex-wrap: wrap; gap: 16px; }
+#project-reset-card p { max-width: 74ch; line-height: 1.9; }
+#project-reset-dialog { width: min(590px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); padding: 26px; overflow: auto; border: 1px solid var(--danger-border); border-radius: 18px; }
+#project-reset-dialog p { line-height: 2; color: var(--muted); }
+#project-reset-dialog label { display: block; margin: 20px 0 12px; }
+#project-reset-dialog input { width: 100%; }
+#project-reset-dialog .resource-delete-footer { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
