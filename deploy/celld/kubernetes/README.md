@@ -1,5 +1,9 @@
 # Deploy with Kubernetes
 
+For a sanitized illustration of the Argo CD deployment pattern, see the
+[Argo CD overlay example](overlays/argocd-example/README.md). It contains no
+live environment values and is not connected to an Argo CD Application.
+
 These manifests run the existing Telegram Relay on celld with a persistent state
 volume and an external S3-compatible bucket. The application image uses the real
 Telegram API. No test server, local cluster, or storage emulator is installed.

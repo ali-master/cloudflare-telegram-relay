@@ -1,0 +1,91 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: telegram-relay
+resources:
+  - ../../base
+  - envoy-ingress.yaml
+  - routes.yaml
+images:
+  - name: relay-celld
+    newName: registry.example.com/team/telegram-relay
+    newTag: CHANGE_ME
+patches:
+  - target:
+      kind: ConfigMap
+      name: relay-celld-config
+    patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: relay-celld-config
+        annotations:
+          argocd.argoproj.io/sync-wave: "-2"
+      data:
+        CELLD_BUCKET: s3://replace-me/telegram-relay
+        S3_ENDPOINT: https://s3.example.com
+        AWS_REGION: us-east-1
+        # Enable only with a Celld image that contains the matching S3 patch.
+        CELLD_S3_BARE_IF_MATCH: "1"
+        CELLD_TRUST_FORWARDED_HEADERS: "1"
+  - target:
+      kind: Service
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          argocd.argoproj.io/sync-wave: "-2"
+  - target:
+      kind: NetworkPolicy
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          argocd.argoproj.io/sync-wave: "-2"
+  - target:
+      kind: Job
+      name: relay-celld-publish
+    patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: relay-celld-publish
+        annotations:
+          argocd.argoproj.io/hook: Sync
+          argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+          argocd.argoproj.io/sync-wave: "-1"
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: registry-credentials
+  - target:
+      kind: StatefulSet
+      name: relay-celld
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: relay-celld
+        annotations:
+          argocd.argoproj.io/sync-wave: "0"
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: registry-credentials
+            containers:
+              - name: celld
+                env:
+                  - name: HTTPS_PROXY
+                    value: http://proxy.example.com:8080
+                  - name: NO_PROXY
+                    value: s3.example.com,.svc,.cluster.local,localhost,127.0.0.1
+        volumeClaimTemplates:
+          - metadata:
+              name: state
+            spec:
+              accessModes: [ReadWriteOnce]
+              storageClassName: your-retained-storage-class
+              resources:
+                requests:
+                  storage: 10Gi

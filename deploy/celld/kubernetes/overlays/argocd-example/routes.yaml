@@ -1,0 +1,57 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: relay-https-redirect
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: example-gateway
+      namespace: gateway-system
+      sectionName: http-relay
+  hostnames: [relay.example.com]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /}
+      filters:
+        - type: RequestRedirect
+          requestRedirect: {scheme: https, statusCode: 301}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: relay
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: example-gateway
+      namespace: gateway-system
+      sectionName: https-relay
+  hostnames: [relay.example.com]
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /}
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: X-Forwarded-Host
+                value: relay.example.com
+              - name: X-Forwarded-Proto
+                value: https
+            remove:
+              - CF-Connecting-IP
+              - CF-Ray
+              - Forwarded
+              - X-Real-IP
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: relay-celld
+          port: 8080
+          weight: 1
