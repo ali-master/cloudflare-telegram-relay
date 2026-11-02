@@ -55,5 +55,7 @@ window.RelayReset = (() => {
       finally { busy = false; controls(); }
     });
   }
-  return {init, refresh};
+  /** Keep the confirmation visible while its accepted request is still being submitted. */
+  function canClose(dialog) { return dialog.id !== 'project-reset-dialog' || !busy; }
+  return {init, refresh, canClose};
 })();

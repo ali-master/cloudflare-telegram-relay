@@ -32,6 +32,16 @@ describe('dashboard browser security', () => {
     }
   });
 
+  it('preserves cache-busting URLs while applying the owned-script nonce', async () => {
+    const html = '<script src="/app.js?v=abc123" defer></script><script src="https://evil.test/app.js?v=abc123"></script>';
+    const response = await dashboardAsset(new Request(origin), fixtureAssets(html));
+    const nonce = nonceOf(response);
+    const output = await response.text();
+    expect(output).toContain(`/app.js?v=abc123`);
+    expect([...output.matchAll(/nonce="([^"]+)"/g)].map(match => match[1])).toEqual([nonce]);
+    expect(output).toContain('<script src="https://evil.test/app.js?v=abc123"></script>');
+  });
+
   it('does not authorize inline, unknown, or foreign scripts with the trusted nonce', async () => {
     const body = shell.replace('</head>', '<script>untrusted()</script><script src="/other.js"></script><script src="https://evil.test/app.js"></script><script src="//evil.test/theme.js"></script></head>');
     const response = await dashboardAsset(new Request(origin), fixtureAssets(body));

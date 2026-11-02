@@ -2319,7 +2319,7 @@ $$('[data-go-history]').forEach(button => button.addEventListener('click', () =>
 $$('[data-compose]').forEach(button => button.addEventListener('click', openComposer));
 
 function requestDialogClose(dialog) {
-  if (!window.RelayDeletion.canClose(dialog)) return;
+  if (!window.RelayDeletion.canClose(dialog) || !window.RelayReset.canClose(dialog)) return;
   if (!window.RelayBots.canClose(dialog) || !window.RelayAutomation.canClose(dialog)) return;
   if (dialog.id === 'subscriber-profile-dialog' && subscriberEditor.saving || dialog.id === 'application-dialog' && applicationAudience.saving) return;
   dialog.close();

@@ -33,7 +33,8 @@ export async function dashboardAsset(request: Request, assets: Fetcher): Promise
   return new HTMLRewriter().on('script[src]', {
     element(element) {
       // Only our bundled entry points receive a nonce; never authorize arbitrary inline content.
-      if (dashboardScripts.has(element.getAttribute('src') ?? '')) element.setAttribute('nonce', nonce);
+      const src = element.getAttribute('src') ?? '';
+      if (dashboardScripts.has(src.split('?')[0])) element.setAttribute('nonce', nonce);
     },
   }).transform(shell);
 }

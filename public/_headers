@@ -3,3 +3,9 @@
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
+
+# Revalidate dashboard code and styles so new HTML cannot use an old controller.
+/*.js
+  Cache-Control: no-cache, must-revalidate
+/*.css
+  Cache-Control: no-cache, must-revalidate
