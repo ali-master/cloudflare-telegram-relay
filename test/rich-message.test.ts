@@ -29,6 +29,24 @@ describe('notification calendars in the Worker runtime', () => {
 });
 
 describe('Telegram rich notification content', () => {
+  it('makes plain Git commit and CI pipeline URLs clickable', () => {
+    const commit = 'https://github.com/ali-master/ipu/commit/abcdef0';
+    const pipeline = 'https://gitlab.mom.ir/devops/deployment/applications-mom/-/pipelines/36141';
+    const message = formatRichNotification({
+      ...input,
+      text: `Git commit: ${commit}\nCI/CD pipeline: ${pipeline}`,
+    });
+    expect(message.blocks[1]).toEqual({
+      type: 'paragraph',
+      text: [
+        'Git commit: ',
+        {type: 'url', text: commit, url: commit},
+        '\nCI/CD pipeline: ',
+        {type: 'url', text: pipeline, url: pipeline},
+      ],
+    });
+  });
+
   it('renders an opted-in HTML body as native Telegram blocks while other fields stay literal', () => {
     const message = formatRichNotification({
       ...input,

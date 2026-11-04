@@ -104,6 +104,26 @@ function technicalSection(title: string, entries: [string, string][]): InputRich
   return monospaceSection(title, rows.join('\n'));
 }
 
+/** Rich messages disable Telegram's automatic entity detection, so link plain HTTP URLs explicitly. */
+function linkifyPlainText(text: string): RichText {
+  const parts: RichText[] = [];
+  let offset = 0;
+  for (const match of text.matchAll(/(?<!\S)https?:\/\/[^\s<>"']+/giu)) {
+    const url = match[0].replace(/[.,!?;:)\]}]+$/u, '');
+    if (!url) continue;
+    try {
+      const parsed = new URL(url);
+      if (!parsed.hostname || !['http:', 'https:'].includes(parsed.protocol)) continue;
+    } catch { continue; }
+    parts.push(text.slice(offset, match.index));
+    parts.push({type: 'url', text: url, url});
+    offset = match.index + url.length;
+  }
+  if (!parts.length) return text;
+  parts.push(text.slice(offset));
+  return parts.filter(part => part !== '');
+}
+
 /** Only an explicitly HTML body is parsed; all template identifiers remain literal. */
 export function formatRichNotification(
   input: NotificationInput,
@@ -120,7 +140,7 @@ export function formatRichNotification(
   if (showCountryFlag && source && countryFlag(source.country)) context.push(['origin', `${countryFlag(source.country)} ${source.country}`]);
   const body: InputRichBlock[] = input.parseMode === 'HTML'
     ? parseNotificationHtml(input.text).blocks
-    : [{type: 'paragraph', text: input.text}];
+    : [{type: 'paragraph', text: linkifyPlainText(input.text)}];
   const blocks: InputRichBlock[] = [
     {type: 'heading', size: 3, text: `${level.icon} ${input.title || level.label}`},
     ...body,
